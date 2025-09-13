@@ -20,6 +20,38 @@ from ui_settings_tab import SETTINGS_FILE
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+from PyQt6.QtWidgets import QDialog
+
+# --- Preview Dialog ---
+class PreviewDialog(QDialog):
+    """A dialog to show a larger preview of an image."""
+    def __init__(self, image_url, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Meme Preview")
+        self.setMinimumSize(400, 400)
+
+        self.layout = QVBoxLayout(self)
+        self.image_label = QLabel("Downloading high-resolution image...", self)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(self.image_label)
+
+        self.downloader = ImageDownloader(image_url)
+        self.downloader.finished.connect(self.set_image)
+        self.downloader.error.connect(self.on_download_error)
+        self.downloader.start()
+
+    def set_image(self, pixmap):
+        self.image_label.setPixmap(pixmap.scaled(
+            self.sizeHint(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        ))
+        self.resize(pixmap.width(), pixmap.height())
+
+    def on_download_error(self):
+        self.image_label.setText("Failed to load high-resolution image.")
+
+
 # --- Meme Widget ---
 class MemeWidget(QWidget):
     """A widget to display a single meme with a checkbox."""
@@ -32,7 +64,7 @@ class MemeWidget(QWidget):
         self.image_label = QLabel("Downloading...")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setFixedSize(200, 200)
-        self.image_label.setStyleSheet("border: 1px solid grey;")
+        self.image_label.setStyleSheet("border: 1px solid grey; cursor: pointer;")
 
         self.checkbox = QCheckBox(meme_data['title'])
         self.checkbox.setToolTip(meme_data['title'])
@@ -46,6 +78,17 @@ class MemeWidget(QWidget):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         ))
+
+    def on_thumbnail_error(self):
+        """Updates the label to show a loading error."""
+        self.image_label.setText("Failed to\nload image")
+        self.image_label.setStyleSheet("border: 1px solid red; color: red;")
+
+    def mousePressEvent(self, event):
+        """Handle clicks on the widget to show a preview."""
+        if self.image_label.geometry().contains(event.pos()):
+            preview_dialog = PreviewDialog(self.meme_data['url'], self)
+            preview_dialog.exec()
 
 # --- Worker Threads ---
 class RedditSearchWorker(QThread):
@@ -269,6 +312,7 @@ class CreatorTab(QWidget):
 
             downloader = ImageDownloader(meme_data['url'])
             downloader.finished.connect(widget.set_image)
+            downloader.error.connect(widget.on_thumbnail_error)
             self.image_downloaders.append(downloader)
             downloader.start()
 
@@ -389,3 +433,22 @@ class CreatorTab(QWidget):
     def _set_ui_enabled(self, enabled: bool):
         self.search_button.setEnabled(enabled)
         self.compile_button.setEnabled(enabled)
+
+    def shutdown_workers(self):
+        """Safely terminates any running worker threads."""
+        logging.info("Shutdown initiated. Terminating active worker threads...")
+        workers = [
+            getattr(self, 'search_worker', None),
+            getattr(self, 'compile_worker', None),
+            getattr(self, 'upload_worker', None)
+        ]
+        workers.extend(self.image_downloaders)
+
+        for worker in workers:
+            if worker is not None and worker.isRunning():
+                try:
+                    worker.quit()
+                    worker.wait(2000) # Wait up to 2 seconds
+                    logging.info(f"Terminated worker: {worker.__class__.__name__}")
+                except Exception as e:
+                    logging.error(f"Error terminating worker {worker.__class__.__name__}: {e}")

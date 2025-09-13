@@ -75,5 +75,5 @@ def extract_text_from_image(image_source: str) -> str:
         logging.error("Tesseract is not installed or not in your PATH. Please configure it in Settings.")
         return ""
     except Exception as e:
-        logging.error(f"An error occurred during OCR processing for {image_url}: {e}")
+        logging.error(f"An error occurred during OCR processing for {image_source}: {e}")
         return ""

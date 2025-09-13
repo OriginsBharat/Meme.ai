@@ -28,6 +28,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.creator_tab, "Creator")
         self.tabs.addTab(self.settings_tab, "Settings")
 
+    def closeEvent(self, event):
+        """Overrides the default close event to shut down worker threads."""
+        self.creator_tab.shutdown_workers()
+        event.accept()
+
 
 import os
 
