@@ -5,7 +5,7 @@ import os
 import tempfile
 import uuid
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QScrollArea,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QScrollArea,
     QLabel, QGridLayout, QFrame, QCheckBox, QMessageBox, QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap
 
 # Import backend services
 from reddit_client import fetch_reddit_memes
-from ocr_service import extract_text_from_image, configure_tesseract
+from ocr_service import extract_text_from_image, configure_tesseract, configure_tessdata
 from tts_service import TTSManager
 from video_compiler import compile_video
 from ui_settings_tab import SETTINGS_FILE
@@ -41,12 +41,18 @@ class PreviewDialog(QDialog):
         self.downloader.start()
 
     def set_image(self, pixmap):
-        self.image_label.setPixmap(pixmap.scaled(
-            self.sizeHint(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        ))
-        self.resize(pixmap.width(), pixmap.height())
+        # Get available screen size
+        screen_geometry = QApplication.primaryScreen().availableGeometry()
+        max_width = int(screen_geometry.width() * 0.9)
+        max_height = int(screen_geometry.height() * 0.9)
+
+        # Scale the pixmap to fit within the max dimensions while keeping aspect ratio
+        scaled_pixmap = pixmap.scaled(max_width, max_height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+        self.image_label.setPixmap(scaled_pixmap)
+
+        # Resize the dialog to fit the scaled image, plus some margin
+        self.resize(scaled_pixmap.width() + 20, scaled_pixmap.height() + 20)
 
     def on_download_error(self):
         self.image_label.setText("Failed to load high-resolution image.")
@@ -64,7 +70,7 @@ class MemeWidget(QWidget):
         self.image_label = QLabel("Downloading...")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setFixedSize(200, 200)
-        self.image_label.setStyleSheet("border: 1px solid grey; cursor: pointer;")
+        self.image_label.setStyleSheet("border: 1px solid grey;")
 
         self.checkbox = QCheckBox(meme_data['title'])
         self.checkbox.setToolTip(meme_data['title'])
@@ -152,9 +158,11 @@ class VideoCompileWorker(QThread):
         try:
             self.progress.emit(f"Created temporary directory...")
 
-            if not configure_tesseract(self.settings["tesseract_path"]):
-                raise RuntimeError("Tesseract not configured. Check path in Settings.")
-            tts_manager = TTSManager(api_key=self.settings["elevenlabs_api_key"])
+            # Configure Tesseract and TTS services
+            configure_tessdata(self.settings.get("tessdata_path"))
+            if not configure_tesseract(self.settings.get("tesseract_path")):
+                raise RuntimeError("Tesseract executable not configured. Check path in Settings.")
+            tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
 
             processed_meme_data = []
             total_memes = len(self.selected_widgets)

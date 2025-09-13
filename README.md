@@ -49,8 +49,9 @@ Before you can use the app, you must configure your API keys and file paths in t
     -   Create credentials for an "OAuth 2.0 Client ID" of type "Desktop application".
     -   Download the `client_secrets.json` file.
     -   In the app's settings, browse to and select this downloaded JSON file.
-4.  **Tesseract Executable Path:**
-    -   Enter the full path to `tesseract.exe` that you noted during installation.
+4.  **Tesseract Configuration:**
+    -   **Tesseract Executable:** Enter the full path to `tesseract.exe` that you noted during installation.
+    -   **Tessdata Directory:** You must also provide the path to the `tessdata` directory. This folder is located in your Tesseract installation directory (e.g., `C:\Program Files\Tesseract-OCR\tessdata`). Both paths are required for OCR to function correctly.
 5.  **Media Files:**
     -   Use the "Browse..." buttons to select your default intro, outro, background video, and background music files.
 

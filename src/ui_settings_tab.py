@@ -35,6 +35,8 @@ class SettingsTab(QWidget):
         self.elevenlabs_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.tesseract_path_edit = QLineEdit()
         tesseract_browse_button = QPushButton("Browse...")
+        self.tessdata_path_edit = QLineEdit()
+        tessdata_browse_button = QPushButton("Browse...")
         self.google_secrets_path_edit = QLineEdit()
         google_browse_button = QPushButton("Browse...")
 
@@ -64,6 +66,7 @@ class SettingsTab(QWidget):
         form_layout.addRow("ElevenLabs API Key:", self.elevenlabs_api_key_edit)
         form_layout.addRow("Google Client Secrets File:", self._create_browse_row(self.google_secrets_path_edit, google_browse_button))
         form_layout.addRow("Tesseract Executable:", self._create_browse_row(self.tesseract_path_edit, tesseract_browse_button))
+        form_layout.addRow("Tessdata Directory:", self._create_browse_row(self.tessdata_path_edit, tessdata_browse_button))
 
         form_layout.addRow(files_group_label)
         form_layout.addRow("Intro Video:", self._create_browse_row(self.intro_path_edit, intro_browse_button))
@@ -78,6 +81,7 @@ class SettingsTab(QWidget):
         save_button.clicked.connect(self._save_settings)
         google_browse_button.clicked.connect(self._create_browse_handler(self.google_secrets_path_edit, "JSON files (*.json)"))
         tesseract_browse_button.clicked.connect(self._create_browse_handler(self.tesseract_path_edit, "Executables (*.exe)"))
+        tessdata_browse_button.clicked.connect(self._browse_tessdata_directory)
         intro_browse_button.clicked.connect(self._create_browse_handler(self.intro_path_edit, "Videos (*.mp4 *.mov *.avi)"))
         outro_browse_button.clicked.connect(self._create_browse_handler(self.outro_path_edit, "Videos (*.mp4 *.mov *.avi)"))
         bg_video_browse_button.clicked.connect(self._create_browse_handler(self.bg_video_path_edit, "Videos (*.mp4 *.mov *.avi)"))
@@ -103,6 +107,12 @@ class SettingsTab(QWidget):
                 line_edit_widget.setText(filepath)
         return handler
 
+    def _browse_tessdata_directory(self):
+        """Opens a dialog to select the tessdata directory."""
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Tessdata Directory")
+        if dir_path:
+            self.tessdata_path_edit.setText(dir_path)
+
     def _save_settings(self):
         """Saves all settings from the UI to a JSON file."""
         settings = {
@@ -112,6 +122,7 @@ class SettingsTab(QWidget):
             "elevenlabs_api_key": self.elevenlabs_api_key_edit.text(),
             "google_secrets_path": self.google_secrets_path_edit.text(),
             "tesseract_path": self.tesseract_path_edit.text(),
+            "tessdata_path": self.tessdata_path_edit.text(),
             "intro_path": self.intro_path_edit.text(),
             "outro_path": self.outro_path_edit.text(),
             "bg_video_path": self.bg_video_path_edit.text(),
@@ -138,6 +149,7 @@ class SettingsTab(QWidget):
             self.elevenlabs_api_key_edit.setText(settings.get("elevenlabs_api_key", ""))
             self.google_secrets_path_edit.setText(settings.get("google_secrets_path", ""))
             self.tesseract_path_edit.setText(settings.get("tesseract_path", ""))
+            self.tessdata_path_edit.setText(settings.get("tessdata_path", ""))
             self.intro_path_edit.setText(settings.get("intro_path", ""))
             self.outro_path_edit.setText(settings.get("outro_path", ""))
             self.bg_video_path_edit.setText(settings.get("bg_video_path", ""))

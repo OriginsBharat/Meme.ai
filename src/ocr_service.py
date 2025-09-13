@@ -35,6 +35,20 @@ def configure_tesseract(tesseract_cmd_path: str):
         logging.error(f"An error occurred while configuring Tesseract: {e}")
         return False
 
+def configure_tessdata(tessdata_path: str):
+    """
+    Sets the TESSDATA_PREFIX environment variable for Tesseract.
+
+    Args:
+        tessdata_path (str): The file path to the 'tessdata' directory.
+    """
+    if tessdata_path and os.path.isdir(tessdata_path):
+        os.environ['TESSDATA_PREFIX'] = tessdata_path
+        logging.info(f"TESSDATA_PREFIX set to: {tessdata_path}")
+    else:
+        logging.warning(f"Tessdata path not set or invalid: {tessdata_path}")
+
+
 def extract_text_from_image(image_source: str) -> str:
     """
     Extracts text from an image from either a local file path or a URL.
