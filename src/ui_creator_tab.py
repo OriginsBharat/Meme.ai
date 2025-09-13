@@ -86,7 +86,8 @@ class MemeWidget(QWidget):
 
     def mousePressEvent(self, event):
         """Handle clicks on the widget to show a preview."""
-        if self.image_label.geometry().contains(event.pos()):
+        # Trigger preview only if the click is not on the checkbox
+        if not self.checkbox.geometry().contains(event.pos()):
             preview_dialog = PreviewDialog(self.meme_data['url'], self)
             preview_dialog.exec()
 
@@ -206,13 +207,14 @@ class YouTubeUploadWorker(QThread):
     finished = pyqtSignal(str, list) # video_id, used_meme_data
     error = pyqtSignal(str)
 
-    def __init__(self, settings, video_path, title, description, meme_data):
+    def __init__(self, settings, video_path, title, description, meme_data, temp_dir):
         super().__init__()
         self.settings = settings
         self.video_path = video_path
         self.title = title
         self.description = description
         self.meme_data = meme_data
+        self.temp_dir = temp_dir
 
     def run(self):
         try:
@@ -228,6 +230,13 @@ class YouTubeUploadWorker(QThread):
             self.finished.emit(video_id, self.meme_data)
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            # Clean up the temporary directory after the upload attempt
+            try:
+                shutil.rmtree(self.temp_dir)
+                logging.info(f"Successfully cleaned up temporary directory: {self.temp_dir}")
+            except Exception as e:
+                logging.error(f"Failed to clean up temporary directory {self.temp_dir}: {e}")
 
 
 # --- Creator Tab ---
@@ -369,19 +378,24 @@ class CreatorTab(QWidget):
 
         elif msg_box.clickedButton() == upload_button:
             meme_data_list = [w.meme_data for w in self.widgets_for_compilation]
-            self._start_youtube_upload(video_path, meme_data_list)
+            self._start_youtube_upload(video_path, meme_data_list, temp_dir)
+        else:
+            # If user dismisses or saves, clean up the temp dir
+            try:
+                shutil.rmtree(temp_dir)
+                logging.info(f"Successfully cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logging.error(f"Failed to clean up temporary directory {temp_dir}: {e}")
 
-        # Cleanup the temp directory regardless of choice
-        try:
-            shutil.rmtree(temp_dir)
-            logging.info(f"Successfully cleaned up temporary directory: {temp_dir}")
-        except Exception as e:
-            logging.error(f"Failed to clean up temporary directory {temp_dir}: {e}")
-
-    def _start_youtube_upload(self, video_path, meme_data_list):
+    def _start_youtube_upload(self, video_path, meme_data_list, temp_dir):
         title, ok = QInputDialog.getText(self, "Video Details", "Enter a title for your video:")
         if not ok or not title:
             self.status_label.setText("Status: Upload cancelled.")
+            # Clean up temp dir if upload is cancelled
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                logging.error(f"Failed to clean up temp dir after cancelled upload: {e}")
             return
 
         description = "A meme compilation made with Jules' Meme Video Compiler!"
@@ -390,7 +404,7 @@ class CreatorTab(QWidget):
         self._set_ui_enabled(False)
         self.status_label.setText("Status: Uploading to YouTube...")
 
-        self.upload_worker = YouTubeUploadWorker(settings, video_path, title, description, meme_data_list)
+        self.upload_worker = YouTubeUploadWorker(settings, video_path, title, description, meme_data_list, temp_dir)
         self.upload_worker.finished.connect(self._on_upload_finished)
         self.upload_worker.error.connect(self._handle_error)
         self.upload_worker.start()
