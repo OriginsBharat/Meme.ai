@@ -1,5 +1,6 @@
 import praw
 import logging
+from used_memes_manager import get_used_meme_ids
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,7 +17,7 @@ SUBREDDITS_TO_SEARCH = [
 # Supported image formats
 IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 
-def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyword: str, limit: int = 25, upvote_threshold: int = 500, comment_threshold: int = 2):
+def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyword: str, total_limit: int = 25, search_limit_per_subreddit: int = 50, upvote_threshold: int = 500, comment_threshold: int = 2):
     """
     Fetches image-based memes from Reddit based on a keyword and specific criteria.
 
@@ -25,7 +26,8 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
         client_secret (str): The Reddit API client secret.
         user_agent (str): The user agent for the Reddit API client.
         keyword (str): The keyword to search for in meme subreddits.
-        limit (int): The maximum number of posts to check in each subreddit.
+        total_limit (int): The maximum number of memes to return in total.
+        search_limit_per_subreddit (int): The max number of posts to check in each subreddit.
         upvote_threshold (int): The minimum number of upvotes a post must have.
         comment_threshold (int): The minimum number of comments containing "relatable".
 
@@ -54,16 +56,24 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
     found_memes = []
     # Use a set to avoid processing duplicate posts if they appear in multiple searches
     processed_post_ids = set()
+    used_ids = get_used_meme_ids()
+    logging.info(f"Found {len(used_ids)} already used memes. They will be excluded from the search.")
 
-    logging.info(f"Searching for memes with keyword '{keyword}' across {len(SUBREDDITS_TO_SEARCH)} subreddits.")
+    logging.info(f"Searching for up to {total_limit} memes with keyword '{keyword}'...")
     for subreddit_name in SUBREDDITS_TO_SEARCH:
+        if len(found_memes) >= total_limit:
+            logging.info("Total meme limit reached. Stopping search.")
+            break
         try:
             subreddit = reddit.subreddit(subreddit_name)
             # Search for posts within the subreddit
-            for post in subreddit.search(keyword, sort="relevance", limit=limit):
-                if post.id in processed_post_ids:
+            for post in subreddit.search(keyword, sort="relevance", limit=search_limit_per_subreddit):
+                if post.id in processed_post_ids or post.id in used_ids:
                     continue
                 processed_post_ids.add(post.id)
+
+                if len(found_memes) >= total_limit:
+                    break
 
                 # --- Filtering Criteria ---
                 # 1. Check if the post URL ends with a supported image extension
@@ -97,4 +107,4 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
             continue
 
     logging.info(f"Found a total of {len(found_memes)} memes matching the criteria.")
-    return found_memes
+    return found_memes[:total_limit]

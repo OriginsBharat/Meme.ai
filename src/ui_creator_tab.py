@@ -91,6 +91,7 @@ class ImageDownloader(QThread):
 
 import shutil
 from youtube_uploader import upload_video
+from used_memes_manager import add_used_meme_ids
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str) # video_path, temp_dir
@@ -137,7 +138,8 @@ class VideoCompileWorker(QThread):
                 processed_meme_data.append({'image_path': image_filename, 'tts_audio_path': audio_filename})
 
             if not processed_meme_data:
-                raise RuntimeError("No memes with text were found to compile.")
+                self.error.emit("Compilation failed: Could not find any text in the selected images. Please try different memes.")
+                return
 
             self.progress.emit("Compiling final video...")
             output_video_path = os.path.join(temp_dir, f"final_video_{uuid.uuid4().hex}.mp4")
@@ -158,15 +160,16 @@ class VideoCompileWorker(QThread):
             self.error.emit(str(e))
 
 class YouTubeUploadWorker(QThread):
-    finished = pyqtSignal(str) # video_id
+    finished = pyqtSignal(str, list) # video_id, used_meme_data
     error = pyqtSignal(str)
 
-    def __init__(self, settings, video_path, title, description):
+    def __init__(self, settings, video_path, title, description, meme_data):
         super().__init__()
         self.settings = settings
         self.video_path = video_path
         self.title = title
         self.description = description
+        self.meme_data = meme_data
 
     def run(self):
         try:
@@ -179,7 +182,7 @@ class YouTubeUploadWorker(QThread):
             )
             if not video_id:
                 raise RuntimeError("Upload failed. Check logs for details.")
-            self.finished.emit(video_id)
+            self.finished.emit(video_id, self.meme_data)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -189,6 +192,7 @@ class CreatorTab(QWidget):
     def __init__(self):
         super().__init__()
         self.image_downloaders = []
+        self.widgets_for_compilation = []
 
         main_layout = QVBoxLayout(self)
 
@@ -290,8 +294,9 @@ class CreatorTab(QWidget):
 
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
+        self.widgets_for_compilation = selected_widgets
 
-        self.compile_worker = VideoCompileWorker(selected_widgets, settings)
+        self.compile_worker = VideoCompileWorker(self.widgets_for_compilation, settings)
         self.compile_worker.progress.connect(self._update_status)
         self.compile_worker.finished.connect(self._on_compilation_finished)
         self.compile_worker.error.connect(self._handle_error)
@@ -319,7 +324,8 @@ class CreatorTab(QWidget):
                 self._handle_error(f"Failed to save file: {e}")
 
         elif msg_box.clickedButton() == upload_button:
-            self._start_youtube_upload(video_path)
+            meme_data_list = [w.meme_data for w in self.widgets_for_compilation]
+            self._start_youtube_upload(video_path, meme_data_list)
 
         # Cleanup the temp directory regardless of choice
         try:
@@ -328,7 +334,7 @@ class CreatorTab(QWidget):
         except Exception as e:
             logging.error(f"Failed to clean up temporary directory {temp_dir}: {e}")
 
-    def _start_youtube_upload(self, video_path):
+    def _start_youtube_upload(self, video_path, meme_data_list):
         title, ok = QInputDialog.getText(self, "Video Details", "Enter a title for your video:")
         if not ok or not title:
             self.status_label.setText("Status: Upload cancelled.")
@@ -340,14 +346,18 @@ class CreatorTab(QWidget):
         self._set_ui_enabled(False)
         self.status_label.setText("Status: Uploading to YouTube...")
 
-        self.upload_worker = YouTubeUploadWorker(settings, video_path, title, description)
+        self.upload_worker = YouTubeUploadWorker(settings, video_path, title, description, meme_data_list)
         self.upload_worker.finished.connect(self._on_upload_finished)
         self.upload_worker.error.connect(self._handle_error)
         self.upload_worker.start()
 
-    def _on_upload_finished(self, video_id):
+    def _on_upload_finished(self, video_id, used_meme_data):
         self._set_ui_enabled(True)
         self.status_label.setText("Status: Ready")
+
+        # Log the used meme IDs
+        meme_ids_to_log = [meme['id'] for meme in used_meme_data]
+        add_used_meme_ids(meme_ids_to_log)
 
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Upload Successful!")

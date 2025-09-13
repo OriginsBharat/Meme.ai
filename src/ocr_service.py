@@ -3,6 +3,7 @@ import requests
 import logging
 from PIL import Image
 import io
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,25 +35,32 @@ def configure_tesseract(tesseract_cmd_path: str):
         logging.error(f"An error occurred while configuring Tesseract: {e}")
         return False
 
-def extract_text_from_image(image_url: str) -> str:
+def extract_text_from_image(image_source: str) -> str:
     """
-    Downloads an image from a URL and extracts text from it using OCR.
+    Extracts text from an image from either a local file path or a URL.
 
     Args:
-        image_url (str): The URL of the image to process.
+        image_source (str): The local file path or URL of the image to process.
 
     Returns:
         str: The extracted text from the image. Returns an empty string if
              no text is found or if an error occurs.
     """
-    logging.info(f"Attempting to extract text from image URL: {image_url}")
+    logging.info(f"Attempting to extract text from image source: {image_source}")
     try:
-        # Download the image from the URL
-        response = requests.get(image_url, stream=True, timeout=10)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-
-        # Open the image from the response content
-        image = Image.open(io.BytesIO(response.content))
+        image = None
+        # Check if the source is a URL or a local file
+        if image_source.lower().startswith(('http://', 'https://')):
+            # It's a URL, download it
+            response = requests.get(image_source, stream=True, timeout=10)
+            response.raise_for_status()
+            image = Image.open(io.BytesIO(response.content))
+        else:
+            # It's a local file path
+            if not os.path.exists(image_source):
+                logging.error(f"Image file not found at local path: {image_source}")
+                return ""
+            image = Image.open(image_source)
 
         # Use pytesseract to extract text
         extracted_text = pytesseract.image_to_string(image)
@@ -61,7 +69,7 @@ def extract_text_from_image(image_url: str) -> str:
         return extracted_text.strip()
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to download image from {image_url}: {e}")
+        logging.error(f"Failed to download image from {image_source}: {e}")
         return ""
     except pytesseract.TesseractNotFoundError:
         logging.error("Tesseract is not installed or not in your PATH. Please configure it in Settings.")
