@@ -1,0 +1,98 @@
+/*
+ * Neon Pink/Purple Dark Theme
+ */
+
+QWidget {
+    background-color: #1a1a2e; /* Dark navy blue */
+    color: #e0e0e0; /* Light grey text */
+    font-family: "Segoe UI", "Helvetica Neue", "Arial", sans-serif;
+    font-size: 14px;
+}
+
+QTabWidget::pane {
+    border: 1px solid #9e4244; /* Dark pink border */
+}
+
+QTabBar::tab {
+    background: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #1f4068;
+    border-bottom: none;
+    padding: 8px 20px;
+}
+
+QTabBar::tab:selected {
+    background: #1f4068; /* A slightly lighter blue */
+    color: #f0f0f0;
+    border: 1px solid #e94560; /* Bright pink border */
+    border-bottom: 1px solid #1f4068; /* Match pane background */
+}
+
+QTabBar::tab:hover {
+    background: #1f4068;
+}
+
+QLabel {
+    color: #e0e0e0;
+}
+
+QLineEdit {
+    background-color: #16213e;
+    border: 1px solid #1f4068;
+    padding: 5px;
+    border-radius: 4px;
+    color: #f0f0f0;
+}
+
+QLineEdit:focus {
+    border: 1px solid #e94560; /* Pink focus border */
+}
+
+QPushButton {
+    background-color: #e94560; /* Bright Pink */
+    color: #ffffff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+QPushButton:hover {
+    background-color: #f06292; /* Lighter pink on hover */
+}
+
+QPushButton:pressed {
+    background-color: #c2185b; /* Darker pink when pressed */
+}
+
+QPushButton:disabled {
+    background-color: #555555;
+    color: #888888;
+}
+
+QMessageBox {
+    background-color: #1f4068;
+}
+
+QScrollArea {
+    border: 1px solid #1f4068;
+}
+
+/* Style the scrollbars */
+QScrollBar:vertical {
+    border: 1px solid #1f4068;
+    background: #16213e;
+    width: 15px;
+    margin: 15px 0 15px 0;
+}
+QScrollBar::handle:vertical {
+    background: #e94560;
+    min-height: 20px;
+    border-radius: 7px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}

@@ -1,0 +1,9 @@
+PyQt6
+praw
+moviepy
+pytesseract
+elevenlabs
+google-api-python-client
+google-auth-oauthlib
+requests
+pyinstaller
