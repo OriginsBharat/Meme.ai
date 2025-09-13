@@ -6,7 +6,7 @@ import tempfile
 import uuid
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QScrollArea,
-    QLabel, QGridLayout, QFrame, QCheckBox, QMessageBox
+    QLabel, QGridLayout, QFrame, QCheckBox, QMessageBox, QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap

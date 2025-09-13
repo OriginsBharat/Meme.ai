@@ -1,7 +1,7 @@
 import json
 import logging
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QLabel, QFileDialog, QMessageBox
 )
 from PyQt6.QtCore import Qt
