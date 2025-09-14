@@ -1,8 +1,5 @@
 import logging
 import os
-from moviepy.editor import (
-    VideoFileClip,
-    AudioFileClip,
 import numpy as np
 from PIL import Image
 from moviepy.editor import (
@@ -14,6 +11,7 @@ from moviepy.editor import (
     CompositeAudioClip,
     ColorClip
 )
+import moviepy.video.fx.all as vfx
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -46,6 +44,7 @@ def compile_video(
     """
     logging.info("Starting video compilation process.")
 
+    audio_clips = []
     try:
         # --- 1. Create Clips for Each Meme ---
         meme_clips = []
@@ -61,6 +60,7 @@ def compile_video(
 
             # Load the TTS audio to determine its duration
             tts_audio_clip = AudioFileClip(audio_path)
+            audio_clips.append(tts_audio_clip)
             # Per user request, duration is TTS length + 0.75s
             image_duration = tts_audio_clip.duration + 0.75
 
@@ -115,7 +115,7 @@ def compile_video(
             bg_video_clip = bg_video_clip.loop(duration=meme_segment_duration)
 
         # Resize background to standard resolution
-        bg_video_clip = bg_video_clip.resize(VIDEO_RESOLUTION)
+        bg_video_clip = bg_video_clip.fx(vfx.resize, newsize=VIDEO_RESOLUTION)
 
         # Load background music and trim/loop
         bg_music_clip = AudioFileClip(bg_music_path)
@@ -137,8 +137,8 @@ def compile_video(
 
         # --- 5. Add Intro and Outro ---
         logging.info("Adding intro and outro.")
-        intro_clip = VideoFileClip(intro_path).resize(VIDEO_RESOLUTION)
-        outro_clip = VideoFileClip(outro_path).resize(VIDEO_RESOLUTION)
+        intro_clip = VideoFileClip(intro_path).fx(vfx.resize, newsize=VIDEO_RESOLUTION)
+        outro_clip = VideoFileClip(outro_path).fx(vfx.resize, newsize=VIDEO_RESOLUTION)
 
         final_video = concatenate_videoclips([intro_clip, final_segment, outro_clip])
 
@@ -159,6 +159,17 @@ def compile_video(
         logging.error(f"An unexpected error occurred during video compilation: {e}", exc_info=True)
         return None
     finally:
+        # --- 7. Clean up all file handles ---
+        logging.info("Closing all audio and video file handles.")
+        for clip in meme_clips:
+            if clip: clip.close()
+        for clip in audio_clips:
+            if clip: clip.close()
+        if 'bg_video_clip' in locals() and bg_video_clip: bg_video_clip.close()
+        if 'bg_music_clip' in locals() and bg_music_clip: bg_music_clip.close()
+        if 'intro_clip' in locals() and intro_clip: intro_clip.close()
+        if 'outro_clip' in locals() and outro_clip: outro_clip.close()
+
         # Clean up moviepy's internal state if needed
         import gc
         gc.collect()
