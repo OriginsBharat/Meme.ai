@@ -3,6 +3,11 @@ import os
 from moviepy.editor import (
     VideoFileClip,
     AudioFileClip,
+import numpy as np
+from PIL import Image
+from moviepy.editor import (
+    VideoFileClip,
+    AudioFileClip,
     ImageClip,
     CompositeVideoClip,
     concatenate_videoclips,
@@ -59,11 +64,25 @@ def compile_video(
             # Per user request, duration is TTS length + 0.75s
             image_duration = tts_audio_clip.duration + 0.75
 
-            # Create the image clip
-            img_clip = ImageClip(image_path, duration=image_duration)
+            # --- Manual Image Resizing using Pillow ---
+            with Image.open(image_path) as pil_img:
+                # Convert RGBA to RGB if necessary (moviepy can have issues with alpha channels)
+                if pil_img.mode == 'RGBA':
+                    pil_img = pil_img.convert('RGB')
 
-            # Resize image to fit width of standard resolution, maintaining aspect ratio
-            img_clip = img_clip.resize(width=VIDEO_RESOLUTION[0])
+                # Calculate new size while maintaining aspect ratio
+                img_w, img_h = pil_img.size
+                target_w = VIDEO_RESOLUTION[0]
+                target_h = int(img_h * (target_w / img_w))
+
+                # Use the modern Resampling.LANCZOS for high-quality downscaling
+                resized_img = pil_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+                # Convert the Pillow image to a NumPy array for ImageClip
+                image_array = np.array(resized_img)
+
+            # Create the image clip from the resized image array
+            img_clip = ImageClip(image_array, duration=image_duration)
 
             # Create a background color clip
             bg_clip = ColorClip(size=VIDEO_RESOLUTION, color=(0,0,0), duration=image_duration)

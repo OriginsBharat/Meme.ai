@@ -1,6 +1,6 @@
 PyQt6
 praw
-moviepy==1.0.3
+moviepy
 pytesseract
 elevenlabs
 google-api-python-client
