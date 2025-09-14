@@ -1,4 +1,5 @@
 import logging
+from elevenlabs import save
 from elevenlabs.client import ElevenLabs
 
 # Configure logging
@@ -40,16 +41,15 @@ class TTSManager:
 
         logging.info(f"Generating TTS for text: \"{text_to_speak[:50]}...\" using voice '{voice}'.")
         try:
-            # Generate the audio bytes using the correct method
-            audio_bytes = self.client.text_to_speech.convert(
+            # Generate the audio stream (which is a generator)
+            audio_generator = self.client.text_to_speech.convert(
                 text=text_to_speak,
                 voice_id=voice, # The parameter is voice_id
                 model_id=model,
             )
 
-            # Write the returned audio bytes to a file
-            with open(output_filepath, 'wb') as f:
-                f.write(audio_bytes)
+            # Use the library's save function to correctly handle the generator
+            save(audio_generator, output_filepath)
 
             logging.info(f"Successfully saved TTS audio to {output_filepath}")
             return output_filepath
