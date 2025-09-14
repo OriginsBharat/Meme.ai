@@ -57,6 +57,26 @@ class TTSManager:
             logging.error(f"Failed to generate or save TTS audio: {e}", exc_info=True)
             return None
 
+    def get_subscription_info(self) -> dict | None:
+        """
+        Fetches the user's subscription information from ElevenLabs.
+
+        Returns:
+            dict | None: A dictionary with subscription details or None if an error occurs.
+        """
+        logging.info("Fetching ElevenLabs subscription info.")
+        try:
+            response = self.client.user.get()
+            subscription_info = {
+                "character_count": response.subscription.character_count,
+                "character_limit": response.subscription.character_limit,
+            }
+            logging.info(f"Subscription info retrieved: {subscription_info}")
+            return subscription_info
+        except Exception as e:
+            logging.error(f"Failed to fetch subscription info: {e}", exc_info=True)
+            return None
+
     def get_available_voices(self) -> list[dict]:
         """
         Fetches a list of available voices from the ElevenLabs API.

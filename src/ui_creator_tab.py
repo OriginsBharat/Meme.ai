@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel, QGridLayout, QFrame, QCheckBox, QMessageBox, QInputDialog, QFileDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QIcon
 
 # Import backend services
 from reddit_client import fetch_reddit_memes
@@ -147,7 +147,7 @@ from ui_upload_dialog import UploadDialog
 from ui_settings_tab import save_settings
 
 class VideoCompileWorker(QThread):
-    finished = pyqtSignal(str, str) # video_path, temp_dir
+    finished = pyqtSignal(str, str, list) # video_path, temp_dir, processed_meme_data
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
@@ -214,7 +214,7 @@ class VideoCompileWorker(QThread):
             )
 
             if result_path:
-                self.finished.emit(output_video_path, temp_dir)
+                self.finished.emit(output_video_path, temp_dir, processed_meme_data)
             else:
                 raise RuntimeError("Video compilation failed. Check logs for details.")
 
@@ -244,7 +244,7 @@ class YouTubeUploadWorker(QThread):
                 description=self.upload_details["description"],
                 tags=self.upload_details["tags"],
                 privacy_status=self.upload_details["privacy"],
-                thumbnail_path=self.settings.get("yt_thumbnail_path")
+                thumbnail_path=self.upload_details.get("thumbnail_path")
             )
             if not video_id:
                 raise RuntimeError("Upload failed. Check logs for details.")
@@ -259,6 +259,22 @@ class YouTubeUploadWorker(QThread):
             except Exception as e:
                 logging.error(f"Failed to clean up temporary directory {self.temp_dir}: {e}")
 
+class FetchSubscriptionInfoWorker(QThread):
+    """Worker thread to fetch ElevenLabs subscription info."""
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, api_key):
+        super().__init__()
+        self.api_key = api_key
+
+    def run(self):
+        try:
+            tts_manager = TTSManager(api_key=self.api_key)
+            info = tts_manager.get_subscription_info()
+            self.finished.emit(info)
+        except Exception as e:
+            self.error.emit(f"Failed to fetch subscription info: {e}")
 
 class FetchVoicesWorker(QThread):
     """Worker thread to fetch available voices from ElevenLabs."""
@@ -284,6 +300,7 @@ class CreatorTab(QWidget):
         super().__init__()
         self.image_downloaders = []
         self.widgets_for_compilation = []
+        self.last_compilation_data = []
 
         main_layout = QVBoxLayout(self)
 
@@ -293,7 +310,20 @@ class CreatorTab(QWidget):
         self.search_button = QPushButton("Search / Refresh")
         search_layout.addWidget(self.keyword_input)
         search_layout.addWidget(self.search_button)
+
+        # --- Quota Display ---
+        quota_layout = QHBoxLayout()
+        self.quota_label = QLabel("ElevenLabs Quota: N/A")
+        self.refresh_quota_button = QPushButton()
+        # Using a standard, built-in icon for refresh
+        self.refresh_quota_button.setIcon(self.style().standardIcon(getattr(QStyle.StandardPixmap, "SP_BrowserReload")))
+        self.refresh_quota_button.setToolTip("Refresh character quota")
+        quota_layout.addStretch()
+        quota_layout.addWidget(self.quota_label)
+        quota_layout.addWidget(self.refresh_quota_button)
+
         main_layout.addLayout(search_layout)
+        main_layout.addLayout(quota_layout)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -314,6 +344,32 @@ class CreatorTab(QWidget):
 
         self.search_button.clicked.connect(self._start_search)
         self.compile_button.clicked.connect(self._start_compilation)
+        self.refresh_quota_button.clicked.connect(self._update_character_count)
+
+        # Initial load of character count
+        self._update_character_count()
+
+    def _update_character_count(self):
+        """Starts the worker to fetch the latest subscription info."""
+        settings = self._load_settings()
+        if settings and settings.get("elevenlabs_api_key"):
+            self.refresh_quota_button.setEnabled(False)
+            self.sub_info_worker = FetchSubscriptionInfoWorker(settings["elevenlabs_api_key"])
+            self.sub_info_worker.finished.connect(self._on_subscription_info_fetched)
+            self.sub_info_worker.error.connect(self._handle_error) # Can reuse the generic error handler
+            self.sub_info_worker.start()
+        else:
+            self.quota_label.setText("ElevenLabs Quota: API Key not set.")
+
+    def _on_subscription_info_fetched(self, info):
+        """Updates the quota label with the fetched info."""
+        self.refresh_quota_button.setEnabled(True)
+        if info:
+            used = info.get("character_count", 0)
+            limit = info.get("character_limit", 0)
+            self.quota_label.setText(f"ElevenLabs Quota: {used:,}/{limit:,} characters used.")
+        else:
+            self.quota_label.setText("ElevenLabs Quota: Failed to fetch.")
 
     def _load_settings(self):
         try:
@@ -418,7 +474,8 @@ class CreatorTab(QWidget):
             self._set_ui_enabled(True)
 
 
-    def _on_compilation_finished(self, video_path, temp_dir):
+    def _on_compilation_finished(self, video_path, temp_dir, processed_meme_data):
+        self.last_compilation_data = processed_meme_data
         self._set_ui_enabled(True)
         self.status_label.setText("Status: Ready")
 
@@ -456,6 +513,13 @@ class CreatorTab(QWidget):
             self._handle_error("Settings not found. Please configure the application.")
             return
 
+        # Automatic thumbnail logic
+        thumbnail_to_upload = settings.get("yt_thumbnail_path")
+        if not thumbnail_to_upload and self.last_compilation_data:
+            # Use the first processed meme image as a fallback thumbnail
+            thumbnail_to_upload = self.last_compilation_data[0].get('image_path')
+            logging.info(f"No default thumbnail set. Using first meme as fallback: {thumbnail_to_upload}")
+
         upload_count = settings.get('upload_count', 0)
 
         upload_dialog = UploadDialog(upload_count, self)
@@ -464,6 +528,9 @@ class CreatorTab(QWidget):
 
             self._set_ui_enabled(False)
             self.status_label.setText("Status: Uploading to YouTube...")
+
+            # Add the chosen thumbnail path to the details passed to the worker
+            upload_details['thumbnail_path'] = thumbnail_to_upload
 
             self.upload_worker = YouTubeUploadWorker(settings, video_path, upload_details, meme_data_list, temp_dir)
             self.upload_worker.finished.connect(self._on_upload_finished)

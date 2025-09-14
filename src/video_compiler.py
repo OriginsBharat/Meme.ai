@@ -146,8 +146,8 @@ def compile_video(
 
         # --- 5. Add Intro and Outro ---
         logging.info("Adding intro and outro.")
-        intro_clip = VideoFileClip(intro_path).fl_image(resize_frame_for_portrait)
-        outro_clip = VideoFileClip(outro_path).fl_image(resize_frame_for_portrait)
+        intro_clip = VideoFileClip(intro_path)
+        outro_clip = VideoFileClip(outro_path)
 
         final_video = concatenate_videoclips([intro_clip, final_segment, outro_clip])
 
