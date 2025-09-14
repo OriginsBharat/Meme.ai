@@ -17,7 +17,7 @@ SUBREDDITS_TO_SEARCH = [
 # Supported image formats
 IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 
-def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyword: str, total_limit: int = 25, search_limit_per_subreddit: int = 50, upvote_threshold: int = 500, comment_threshold: int = 2):
+def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyword: str, total_limit: int = 25, search_limit_per_subreddit: int = 50, upvote_threshold: int = 500):
     """
     Fetches image-based memes from Reddit based on a keyword and specific criteria.
 
@@ -29,7 +29,6 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
         total_limit (int): The maximum number of memes to return in total.
         search_limit_per_subreddit (int): The max number of posts to check in each subreddit.
         upvote_threshold (int): The minimum number of upvotes a post must have.
-        comment_threshold (int): The minimum number of comments containing "relatable".
 
     Returns:
         list: A list of dictionaries, where each dictionary represents a meme
@@ -85,23 +84,14 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
                 if post.score < upvote_threshold:
                     continue
 
-                # 3. Check for "relatable" comments (this is the most intensive check)
-                relatable_comment_count = 0
-                post.comments.replace_more(limit=0)  # Remove "MoreComments" objects
-                for comment in post.comments.list():
-                    if 'relatable' in comment.body.lower():
-                        relatable_comment_count += 1
-                    if relatable_comment_count >= comment_threshold:
-                        break  # Stop counting once the threshold is met
-
-                if relatable_comment_count >= comment_threshold:
-                    logging.info(f"Found suitable meme: '{post.title}' from r/{subreddit_name} with score {post.score}")
-                    found_memes.append({
-                        'id': post.id,
-                        'title': post.title,
-                        'url': post.url,
-                        'score': post.score
-                    })
+                # If all filters pass, add the meme to our list.
+                logging.info(f"Found suitable meme: '{post.title}' from r/{subreddit_name} with score {post.score}")
+                found_memes.append({
+                    'id': post.id,
+                    'title': post.title,
+                    'url': post.url,
+                    'score': post.score
+                })
         except Exception as e:
             logging.error(f"Could not search subreddit r/{subreddit_name}: {e}")
             continue
