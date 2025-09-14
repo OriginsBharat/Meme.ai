@@ -46,9 +46,9 @@ def get_authenticated_service(client_secrets_file):
 
     return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
-def upload_video(client_secrets_file: str, video_path: str, title: str, description: str, tags: list[str]) -> str | None:
+def upload_video(client_secrets_file: str, video_path: str, title: str, description: str, tags: list[str], privacy_status: str, thumbnail_path: str | None = None) -> str | None:
     """
-    Uploads a video to YouTube.
+    Uploads a video to YouTube and sets its thumbnail.
 
     Args:
         client_secrets_file (str): Path to the Google Cloud client secrets JSON file.
@@ -56,6 +56,8 @@ def upload_video(client_secrets_file: str, video_path: str, title: str, descript
         title (str): The title of the video.
         description (str): The description of the video.
         tags (list[str]): A list of tags for the video.
+        privacy_status (str): 'private', 'unlisted', or 'public'.
+        thumbnail_path (str | None): Optional path to the thumbnail image.
 
     Returns:
         str | None: The ID of the uploaded video, or None if it failed.
@@ -73,7 +75,7 @@ def upload_video(client_secrets_file: str, video_path: str, title: str, descript
                 'categoryId': '24' # Entertainment category
             },
             'status': {
-                'privacyStatus': 'private' # Upload as private first
+                'privacyStatus': privacy_status
             }
         }
 
@@ -91,9 +93,41 @@ def upload_video(client_secrets_file: str, video_path: str, title: str, descript
             if status:
                 logging.info(f"Uploaded {int(status.progress() * 100)}%.")
 
-        logging.info(f"Upload successful! Video ID: {response.get('id')}")
-        return response.get('id')
+        video_id = response.get('id')
+        logging.info(f"Upload successful! Video ID: {video_id}")
+
+        # Set the thumbnail if provided
+        if thumbnail_path:
+            set_video_thumbnail(youtube, video_id, thumbnail_path)
+
+        return video_id
 
     except Exception as e:
         logging.error(f"An error occurred during YouTube upload: {e}", exc_info=True)
         return None
+
+def set_video_thumbnail(youtube_service, video_id: str, thumbnail_path: str):
+    """
+    Sets the thumbnail for a given YouTube video.
+
+    Args:
+        youtube_service: The authenticated YouTube service object.
+        video_id (str): The ID of the video to set the thumbnail for.
+        thumbnail_path (str): The file path to the thumbnail image.
+    """
+    if not thumbnail_path or not os.path.exists(thumbnail_path):
+        logging.warning(f"Thumbnail path is invalid or not provided: {thumbnail_path}. Skipping thumbnail upload.")
+        return
+
+    logging.info(f"Uploading thumbnail for video ID: {video_id}")
+    try:
+        request = youtube_service.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(thumbnail_path)
+        )
+        request.execute()
+        logging.info("Thumbnail uploaded successfully.")
+    except Exception as e:
+        logging.error(f"An error occurred during thumbnail upload: {e}", exc_info=True)
+        # We don't return an error here, as the main video upload was successful.
+        # This is a non-critical failure.

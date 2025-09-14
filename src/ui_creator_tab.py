@@ -142,6 +142,8 @@ class ImageDownloader(QThread):
 import shutil
 from youtube_uploader import upload_video
 from used_memes_manager import add_used_meme_ids
+from ui_upload_dialog import UploadDialog
+from ui_settings_tab import save_settings
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str) # video_path, temp_dir
@@ -215,23 +217,24 @@ class YouTubeUploadWorker(QThread):
     finished = pyqtSignal(str, list) # video_id, used_meme_data
     error = pyqtSignal(str)
 
-    def __init__(self, settings, video_path, title, description, meme_data, temp_dir):
+    def __init__(self, settings, video_path, upload_details, meme_data, temp_dir):
         super().__init__()
         self.settings = settings
         self.video_path = video_path
-        self.title = title
-        self.description = description
+        self.upload_details = upload_details
         self.meme_data = meme_data
         self.temp_dir = temp_dir
 
     def run(self):
         try:
             video_id = upload_video(
-                client_secrets_file=self.settings["google_secrets_path"],
+                client_secrets_file=self.settings.get("google_secrets_path"),
                 video_path=self.video_path,
-                title=self.title,
-                description=self.description,
-                tags=["memes", "funny", "reddit"]
+                title=self.upload_details["title"],
+                description=self.upload_details["description"],
+                tags=self.upload_details["tags"],
+                privacy_status=self.upload_details["privacy"],
+                thumbnail_path=self.settings.get("yt_thumbnail_path")
             )
             if not video_id:
                 raise RuntimeError("Upload failed. Check logs for details.")
@@ -396,26 +399,31 @@ class CreatorTab(QWidget):
                 logging.error(f"Failed to clean up temporary directory {temp_dir}: {e}")
 
     def _start_youtube_upload(self, video_path, meme_data_list, temp_dir):
-        title, ok = QInputDialog.getText(self, "Video Details", "Enter a title for your video:")
-        if not ok or not title:
+        settings = self._load_settings()
+        if not settings:
+            self._handle_error("Settings not found. Please configure the application.")
+            return
+
+        upload_count = settings.get('upload_count', 0)
+
+        upload_dialog = UploadDialog(upload_count, self)
+        if upload_dialog.exec() == QDialog.DialogCode.Accepted:
+            upload_details = upload_dialog.get_upload_details()
+
+            self._set_ui_enabled(False)
+            self.status_label.setText("Status: Uploading to YouTube...")
+
+            self.upload_worker = YouTubeUploadWorker(settings, video_path, upload_details, meme_data_list, temp_dir)
+            self.upload_worker.finished.connect(self._on_upload_finished)
+            self.upload_worker.error.connect(self._handle_error)
+            self.upload_worker.start()
+        else:
+            # If user cancels the upload dialog, clean up
             self.status_label.setText("Status: Upload cancelled.")
-            # Clean up temp dir if upload is cancelled
             try:
                 shutil.rmtree(temp_dir)
             except Exception as e:
                 logging.error(f"Failed to clean up temp dir after cancelled upload: {e}")
-            return
-
-        description = "A meme compilation made with Jules' Meme Video Compiler!"
-        settings = self._load_settings()
-
-        self._set_ui_enabled(False)
-        self.status_label.setText("Status: Uploading to YouTube...")
-
-        self.upload_worker = YouTubeUploadWorker(settings, video_path, title, description, meme_data_list, temp_dir)
-        self.upload_worker.finished.connect(self._on_upload_finished)
-        self.upload_worker.error.connect(self._handle_error)
-        self.upload_worker.start()
 
     def _on_upload_finished(self, video_id, used_meme_data):
         self._set_ui_enabled(True)
@@ -424,6 +432,13 @@ class CreatorTab(QWidget):
         # Log the used meme IDs
         meme_ids_to_log = [meme['id'] for meme in used_meme_data]
         add_used_meme_ids(meme_ids_to_log)
+
+        # Increment and save the upload count
+        settings = self._load_settings()
+        if settings:
+            current_count = settings.get('upload_count', 0)
+            settings['upload_count'] = current_count + 1
+            save_settings(settings)
 
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Upload Successful!")

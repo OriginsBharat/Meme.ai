@@ -52,6 +52,8 @@ class SettingsTab(QWidget):
         bg_video_browse_button = QPushButton("Browse...")
         self.bg_music_path_edit = QLineEdit()
         bg_music_browse_button = QPushButton("Browse...")
+        self.yt_thumbnail_path_edit = QLineEdit()
+        yt_thumbnail_browse_button = QPushButton("Browse...")
 
         # Save Button
         save_button = QPushButton("Save Settings")
@@ -73,6 +75,7 @@ class SettingsTab(QWidget):
         form_layout.addRow("Outro Video:", self._create_browse_row(self.outro_path_edit, outro_browse_button))
         form_layout.addRow("Background Video:", self._create_browse_row(self.bg_video_path_edit, bg_video_browse_button))
         form_layout.addRow("Background Music:", self._create_browse_row(self.bg_music_path_edit, bg_music_browse_button))
+        form_layout.addRow("Default YouTube Thumbnail:", self._create_browse_row(self.yt_thumbnail_path_edit, yt_thumbnail_browse_button))
 
         main_layout.addLayout(form_layout)
         main_layout.addWidget(save_button, 0, Qt.AlignmentFlag.AlignCenter)
@@ -86,6 +89,7 @@ class SettingsTab(QWidget):
         outro_browse_button.clicked.connect(self._create_browse_handler(self.outro_path_edit, "Videos (*.mp4 *.mov *.avi)"))
         bg_video_browse_button.clicked.connect(self._create_browse_handler(self.bg_video_path_edit, "Videos (*.mp4 *.mov *.avi)"))
         bg_music_browse_button.clicked.connect(self._create_browse_handler(self.bg_music_path_edit, "Audio (*.mp3 *.wav)"))
+        yt_thumbnail_browse_button.clicked.connect(self._create_browse_handler(self.yt_thumbnail_path_edit, "Images (*.png *.jpg *.jpeg)"))
 
         # --- Load Existing Settings ---
         self._load_settings()
@@ -115,7 +119,15 @@ class SettingsTab(QWidget):
 
     def _save_settings(self):
         """Saves all settings from the UI to a JSON file."""
-        settings = {
+        # Load existing settings first to preserve keys not in the UI (like upload_count)
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            settings = {}
+
+        # Update settings from UI fields
+        settings.update({
             "reddit_client_id": self.reddit_client_id_edit.text(),
             "reddit_client_secret": self.reddit_client_secret_edit.text(),
             "reddit_user_agent": self.reddit_user_agent_edit.text(),
@@ -126,16 +138,14 @@ class SettingsTab(QWidget):
             "intro_path": self.intro_path_edit.text(),
             "outro_path": self.outro_path_edit.text(),
             "bg_video_path": self.bg_video_path_edit.text(),
-            "bg_music_path": self.bg_music_path_edit.text()
-        }
-        try:
-            with open(SETTINGS_FILE, 'w') as f:
-                json.dump(settings, f, indent=4)
-            logging.info(f"Settings successfully saved to {SETTINGS_FILE}")
+            "bg_music_path": self.bg_music_path_edit.text(),
+            "yt_thumbnail_path": self.yt_thumbnail_path_edit.text()
+        })
+
+        if save_settings(settings):
             QMessageBox.information(self, "Success", "Settings have been saved successfully.")
-        except Exception as e:
-            logging.error(f"Failed to save settings: {e}")
-            QMessageBox.warning(self, "Error", f"Could not save settings.\nError: {e}")
+        else:
+            QMessageBox.warning(self, "Error", "Could not save settings.")
 
     def _load_settings(self):
         """Loads settings from the JSON file and populates the UI."""
@@ -154,6 +164,7 @@ class SettingsTab(QWidget):
             self.outro_path_edit.setText(settings.get("outro_path", ""))
             self.bg_video_path_edit.setText(settings.get("bg_video_path", ""))
             self.bg_music_path_edit.setText(settings.get("bg_music_path", ""))
+            self.yt_thumbnail_path_edit.setText(settings.get("yt_thumbnail_path", ""))
             logging.info(f"Settings loaded from {SETTINGS_FILE}")
 
         except FileNotFoundError:
@@ -162,3 +173,23 @@ class SettingsTab(QWidget):
             logging.error(f"Error decoding {SETTINGS_FILE}. The file might be corrupted.")
         except Exception as e:
             logging.error(f"An unexpected error occurred while loading settings: {e}")
+
+
+def save_settings(settings: dict) -> bool:
+    """
+    Saves a dictionary of settings to the settings file.
+
+    Args:
+        settings (dict): The dictionary of settings to save.
+
+    Returns:
+        bool: True if saving was successful, False otherwise.
+    """
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=4)
+        logging.info(f"Settings successfully saved to {SETTINGS_FILE}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to save settings: {e}")
+        return False
