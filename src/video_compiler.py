@@ -19,6 +19,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Standard video resolution
 VIDEO_RESOLUTION = (1080, 1920) # Portrait mode for shorts/reels
 
+def resize_frame_for_portrait(frame):
+    """
+    A function to resize a single video frame to fit the portrait resolution.
+    This is a substitute for the buggy moviepy.resize function.
+    """
+    pil_img = Image.fromarray(frame)
+    resized_pil = pil_img.resize(VIDEO_RESOLUTION, Image.Resampling.LANCZOS)
+    return np.array(resized_pil)
+
 def compile_video(
     meme_data: list[dict],
     intro_path: str,
@@ -114,8 +123,8 @@ def compile_video(
         else:
             bg_video_clip = bg_video_clip.loop(duration=meme_segment_duration)
 
-        # Resize background to standard resolution
-        bg_video_clip = bg_video_clip.fx(vfx.resize, newsize=VIDEO_RESOLUTION)
+        # Resize background to standard resolution using our custom function
+        bg_video_clip = bg_video_clip.fl_image(resize_frame_for_portrait)
 
         # Load background music and trim/loop
         bg_music_clip = AudioFileClip(bg_music_path)
@@ -137,8 +146,8 @@ def compile_video(
 
         # --- 5. Add Intro and Outro ---
         logging.info("Adding intro and outro.")
-        intro_clip = VideoFileClip(intro_path).fx(vfx.resize, newsize=VIDEO_RESOLUTION)
-        outro_clip = VideoFileClip(outro_path).fx(vfx.resize, newsize=VIDEO_RESOLUTION)
+        intro_clip = VideoFileClip(intro_path).fl_image(resize_frame_for_portrait)
+        outro_clip = VideoFileClip(outro_path).fl_image(resize_frame_for_portrait)
 
         final_video = concatenate_videoclips([intro_clip, final_segment, outro_clip])
 
