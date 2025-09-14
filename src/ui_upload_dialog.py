@@ -12,7 +12,7 @@ class UploadDialog(QDialog):
         self.setWindowTitle("YouTube Upload Details")
 
         # --- UI Widgets ---
-        self.title_edit = QLineEdit(f"#{upload_count}")
+        self.title_edit = QLineEdit(f"#{upload_count} #Shorts")
         self.description_edit = QTextEdit()
         self.tags_edit = QLineEdit("memes, funny, reddit, compilation")
         self.privacy_combo = QComboBox()

@@ -19,14 +19,25 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Standard video resolution
 VIDEO_RESOLUTION = (1080, 1920) # Portrait mode for shorts/reels
 
-def resize_frame_for_portrait(frame):
+def crop_to_portrait(clip):
     """
-    A function to resize a single video frame to fit the portrait resolution.
-    This is a substitute for the buggy moviepy.resize function.
+    Crops a video clip to a 9:16 aspect ratio from the center.
     """
-    pil_img = Image.fromarray(frame)
-    resized_pil = pil_img.resize(VIDEO_RESOLUTION, Image.Resampling.LANCZOS)
-    return np.array(resized_pil)
+    original_w, original_h = clip.size
+    target_w, target_h = VIDEO_RESOLUTION
+    target_aspect = target_w / target_h # 9 / 16
+
+    # Calculate the new dimensions for cropping
+    if original_w / original_h > target_aspect:
+        # Original is wider than target -> crop width
+        new_w = int(original_h * target_aspect)
+        new_h = original_h
+    else:
+        # Original is taller than target -> crop height
+        new_w = original_w
+        new_h = int(original_w / target_aspect)
+
+    return vfx.crop(clip, width=new_w, height=new_h, x_center=original_w/2, y_center=original_h/2)
 
 def compile_video(
     meme_data: list[dict],
@@ -73,32 +84,9 @@ def compile_video(
             # Per user request, duration is TTS length + 0.75s
             image_duration = tts_audio_clip.duration + 0.75
 
-            # --- Manual Image Resizing using Pillow ---
-            with Image.open(image_path) as pil_img:
-                # Convert RGBA to RGB if necessary (moviepy can have issues with alpha channels)
-                if pil_img.mode == 'RGBA':
-                    pil_img = pil_img.convert('RGB')
-
-                # --- "Fit Inside" Scaling Logic ---
-                img_w, img_h = pil_img.size
-                container_w, container_h = VIDEO_RESOLUTION
-
-                # Calculate the scaling ratio to fit inside the container
-                ratio_w = container_w / img_w
-                ratio_h = container_h / img_h
-                scale_ratio = min(ratio_w, ratio_h)
-
-                new_w = int(img_w * scale_ratio)
-                new_h = int(img_h * scale_ratio)
-
-                # Use the modern Resampling.LANCZOS for high-quality downscaling
-                resized_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-                # Convert the Pillow image to a NumPy array for ImageClip
-                image_array = np.array(resized_img)
-
-            # Create the image clip from the resized image array
-            img_clip = ImageClip(image_array, duration=image_duration)
+            # As per new request, do not resize the meme image.
+            # Create the image clip directly from the original image path.
+            img_clip = ImageClip(image_path, duration=image_duration)
 
             # Create a background color clip
             bg_clip = ColorClip(size=VIDEO_RESOLUTION, color=(0,0,0), duration=image_duration)
@@ -130,8 +118,8 @@ def compile_video(
         else:
             bg_video_clip = bg_video_clip.loop(duration=meme_segment_duration)
 
-        # Resize background to standard resolution using our custom function
-        bg_video_clip = bg_video_clip.fl_image(resize_frame_for_portrait)
+        # Crop the background to the target 9:16 aspect ratio
+        bg_video_clip = crop_to_portrait(bg_video_clip)
 
         # Load background music and trim/loop
         bg_music_clip = AudioFileClip(bg_music_path)
@@ -153,8 +141,8 @@ def compile_video(
 
         # --- 5. Add Intro and Outro ---
         logging.info("Adding intro and outro.")
-        intro_clip = VideoFileClip(intro_path)
-        outro_clip = VideoFileClip(outro_path)
+        intro_clip = crop_to_portrait(VideoFileClip(intro_path))
+        outro_clip = crop_to_portrait(VideoFileClip(outro_path))
 
         final_video = concatenate_videoclips([intro_clip, final_segment, outro_clip])
 
