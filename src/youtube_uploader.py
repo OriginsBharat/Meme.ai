@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 TOKEN_PICKLE_FILE = 'token.pickle'
 
 # The scopes define the level of access you are requesting.
-SCOPES = ['https://www.googleapis.com/auth/upload.video']
+SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
 
