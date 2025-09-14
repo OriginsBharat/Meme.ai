@@ -17,6 +17,7 @@ from ocr_service import extract_text_from_image, configure_tesseract, configure_
 from tts_service import TTSManager
 from video_compiler import compile_video
 from ui_settings_tab import SETTINGS_FILE
+from ui_voice_dialog import VoiceSelectionDialog
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -150,10 +151,11 @@ class VideoCompileWorker(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, selected_widgets, settings):
+    def __init__(self, selected_widgets, settings, voice_id):
         super().__init__()
         self.selected_widgets = selected_widgets
         self.settings = settings
+        self.voice_id = voice_id
 
     def run(self):
         temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
@@ -189,7 +191,8 @@ class VideoCompileWorker(QThread):
                 audio_filename = os.path.join(temp_dir, f"tts_{i}.mp3")
                 tts_manager.generate_tts_audio(
                     text_to_speak=text,
-                    output_filepath=audio_filename
+                    output_filepath=audio_filename,
+                    voice=self.voice_id
                 )
 
                 processed_meme_data.append({'image_path': image_filename, 'tts_audio_path': audio_filename})
@@ -255,6 +258,24 @@ class YouTubeUploadWorker(QThread):
                 logging.info(f"Successfully cleaned up temporary directory: {self.temp_dir}")
             except Exception as e:
                 logging.error(f"Failed to clean up temporary directory {self.temp_dir}: {e}")
+
+
+class FetchVoicesWorker(QThread):
+    """Worker thread to fetch available voices from ElevenLabs."""
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, api_key):
+        super().__init__()
+        self.api_key = api_key
+
+    def run(self):
+        try:
+            tts_manager = TTSManager(api_key=self.api_key)
+            voices = tts_manager.get_available_voices()
+            self.finished.emit(voices)
+        except Exception as e:
+            self.error.emit(f"Failed to fetch voices: {e}")
 
 
 # --- Creator Tab ---
@@ -366,12 +387,36 @@ class CreatorTab(QWidget):
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
         self.widgets_for_compilation = selected_widgets
+        self.settings = settings # Store settings for later use
 
-        self.compile_worker = VideoCompileWorker(self.widgets_for_compilation, settings)
-        self.compile_worker.progress.connect(self._update_status)
-        self.compile_worker.finished.connect(self._on_compilation_finished)
-        self.compile_worker.error.connect(self._handle_error)
-        self.compile_worker.start()
+        # Start the process by fetching available voices
+        self.status_label.setText("Status: Fetching available voices...")
+        self.fetch_voices_worker = FetchVoicesWorker(api_key=self.settings.get("elevenlabs_api_key"))
+        self.fetch_voices_worker.finished.connect(self._on_voices_fetched)
+        self.fetch_voices_worker.error.connect(self._handle_error)
+        self.fetch_voices_worker.start()
+
+    def _on_voices_fetched(self, voices):
+        """Handles the fetched voices and opens the selection dialog."""
+        if not voices:
+            self._handle_error("Could not retrieve any voices from ElevenLabs. Please check your API key.")
+            return
+
+        dialog = VoiceSelectionDialog(voices, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_voice_id = dialog.get_selected_voice_id()
+            if selected_voice_id:
+                self.status_label.setText("Status: Starting compilation...")
+                # Now start the actual video compilation with the selected voice
+                self.compile_worker = VideoCompileWorker(self.widgets_for_compilation, self.settings, selected_voice_id)
+                self.compile_worker.progress.connect(self._update_status)
+                self.compile_worker.finished.connect(self._on_compilation_finished)
+                self.compile_worker.error.connect(self._handle_error)
+                self.compile_worker.start()
+        else:
+            self.status_label.setText("Status: Compilation cancelled.")
+            self._set_ui_enabled(True)
+
 
     def _on_compilation_finished(self, video_path, temp_dir):
         self._set_ui_enabled(True)

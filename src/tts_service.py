@@ -56,3 +56,22 @@ class TTSManager:
         except Exception as e:
             logging.error(f"Failed to generate or save TTS audio: {e}", exc_info=True)
             return None
+
+    def get_available_voices(self) -> list[dict]:
+        """
+        Fetches a list of available voices from the ElevenLabs API.
+
+        Returns:
+            list[dict]: A list of dictionaries, each containing the name and ID of a voice.
+                        Returns an empty list if an error occurs.
+        """
+        logging.info("Fetching available TTS voices...")
+        try:
+            voices = self.client.voices.search()
+            # Simplify the structure for UI usage
+            voice_list = [{"name": voice.name, "voice_id": voice.voice_id} for voice in voices.voices]
+            logging.info(f"Found {len(voice_list)} available voices.")
+            return voice_list
+        except Exception as e:
+            logging.error(f"Failed to fetch available voices: {e}", exc_info=True)
+            return []
