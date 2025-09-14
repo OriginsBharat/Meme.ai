@@ -79,13 +79,20 @@ def compile_video(
                 if pil_img.mode == 'RGBA':
                     pil_img = pil_img.convert('RGB')
 
-                # Calculate new size while maintaining aspect ratio
+                # --- "Fit Inside" Scaling Logic ---
                 img_w, img_h = pil_img.size
-                target_w = VIDEO_RESOLUTION[0]
-                target_h = int(img_h * (target_w / img_w))
+                container_w, container_h = VIDEO_RESOLUTION
+
+                # Calculate the scaling ratio to fit inside the container
+                ratio_w = container_w / img_w
+                ratio_h = container_h / img_h
+                scale_ratio = min(ratio_w, ratio_h)
+
+                new_w = int(img_w * scale_ratio)
+                new_h = int(img_h * scale_ratio)
 
                 # Use the modern Resampling.LANCZOS for high-quality downscaling
-                resized_img = pil_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                resized_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
                 # Convert the Pillow image to a NumPy array for ImageClip
                 image_array = np.array(resized_img)
