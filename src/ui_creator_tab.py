@@ -14,7 +14,7 @@ from PyQt6.QtGui import QPixmap
 # Import backend services
 from reddit_client import fetch_reddit_memes
 from ocr_service import extract_text_from_image, configure_tesseract, configure_tessdata
-from tts_service import TTSManager
+from tts_service import generate_tts_audio
 from video_compiler import compile_video
 from ui_settings_tab import SETTINGS_FILE
 
@@ -160,11 +160,14 @@ class VideoCompileWorker(QThread):
         try:
             self.progress.emit(f"Created temporary directory...")
 
-            # Configure Tesseract and TTS services
+            # Configure Tesseract
             configure_tessdata(self.settings.get("tessdata_path"))
             if not configure_tesseract(self.settings.get("tesseract_path")):
                 raise RuntimeError("Tesseract executable not configured. Check path in Settings.")
-            tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
+
+            elevenlabs_api_key = self.settings.get("elevenlabs_api_key")
+            if not elevenlabs_api_key:
+                raise RuntimeError("ElevenLabs API Key not configured in Settings.")
 
             processed_meme_data = []
             total_memes = len(self.selected_widgets)
@@ -187,7 +190,11 @@ class VideoCompileWorker(QThread):
 
                 self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS...")
                 audio_filename = os.path.join(temp_dir, f"tts_{i}.mp3")
-                tts_manager.generate_tts_audio(text, audio_filename)
+                generate_tts_audio(
+                    api_key=elevenlabs_api_key,
+                    text_to_speak=text,
+                    output_filepath=audio_filename
+                )
 
                 processed_meme_data.append({'image_path': image_filename, 'tts_audio_path': audio_filename})
 
@@ -198,7 +205,7 @@ class VideoCompileWorker(QThread):
             self.progress.emit("Compiling final video...")
             output_video_path = os.path.join(temp_dir, f"final_video_{uuid.uuid4().hex}.mp4")
 
-            compile_video(
+            result_path = compile_video(
                 meme_data=processed_meme_data,
                 intro_path=self.settings["intro_path"],
                 outro_path=self.settings["outro_path"],
@@ -206,7 +213,11 @@ class VideoCompileWorker(QThread):
                 bg_music_path=self.settings["bg_music_path"],
                 output_path=output_video_path
             )
-            self.finished.emit(output_video_path, temp_dir)
+
+            if result_path:
+                self.finished.emit(output_video_path, temp_dir)
+            else:
+                raise RuntimeError("Video compilation failed. Check logs for details.")
 
         except Exception as e:
             logging.error(f"Error in VideoCompileWorker: {e}", exc_info=True)
