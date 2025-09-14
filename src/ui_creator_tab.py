@@ -14,7 +14,7 @@ from PyQt6.QtGui import QPixmap
 # Import backend services
 from reddit_client import fetch_reddit_memes
 from ocr_service import extract_text_from_image, configure_tesseract, configure_tessdata
-from tts_service import generate_tts_audio
+from tts_service import TTSManager
 from video_compiler import compile_video
 from ui_settings_tab import SETTINGS_FILE
 
@@ -160,14 +160,11 @@ class VideoCompileWorker(QThread):
         try:
             self.progress.emit(f"Created temporary directory...")
 
-            # Configure Tesseract
+            # Configure Tesseract and TTS services
             configure_tessdata(self.settings.get("tessdata_path"))
             if not configure_tesseract(self.settings.get("tesseract_path")):
                 raise RuntimeError("Tesseract executable not configured. Check path in Settings.")
-
-            elevenlabs_api_key = self.settings.get("elevenlabs_api_key")
-            if not elevenlabs_api_key:
-                raise RuntimeError("ElevenLabs API Key not configured in Settings.")
+            tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
 
             processed_meme_data = []
             total_memes = len(self.selected_widgets)
@@ -190,8 +187,7 @@ class VideoCompileWorker(QThread):
 
                 self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS...")
                 audio_filename = os.path.join(temp_dir, f"tts_{i}.mp3")
-                generate_tts_audio(
-                    api_key=elevenlabs_api_key,
+                tts_manager.generate_tts_audio(
                     text_to_speak=text,
                     output_filepath=audio_filename
                 )
