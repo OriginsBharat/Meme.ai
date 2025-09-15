@@ -146,20 +146,17 @@ from used_memes_manager import add_used_meme_ids
 from ui_upload_dialog import UploadDialog
 from ui_settings_tab import save_settings
 from ui_transform_dialog import TransformDialog
-from utils import crop_to_portrait
-from moviepy.editor import VideoFileClip
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str, list) # video_path, temp_dir, processed_meme_data
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, meme_configs, settings, voice_id, master_resolution):
+    def __init__(self, meme_configs, settings, voice_id):
         super().__init__()
         self.meme_configs = meme_configs
         self.settings = settings
         self.voice_id = voice_id
-        self.master_resolution = master_resolution
 
     def run(self):
         # The temp dir is now created in _start_compilation, but we need a reference to it
@@ -211,7 +208,6 @@ class VideoCompileWorker(QThread):
 
             result_path = compile_video(
                 meme_data=processed_meme_data,
-                master_resolution=self.master_resolution,
                 intro_path=self.settings["intro_path"],
                 outro_path=self.settings["outro_path"],
                 bg_video_path=self.settings["bg_video_path"],
@@ -449,19 +445,10 @@ class CreatorTab(QWidget):
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
 
-        # --- New Dynamic Resolution Workflow ---
+        # --- Simplified Workflow with Fixed Resolution ---
         temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
         try:
-            # 1. Determine Master Resolution from Intro
-            self.status_label.setText("Status: Analyzing intro video...")
-            intro_clip = VideoFileClip(settings["intro_path"])
-            cropped_intro = crop_to_portrait(intro_clip)
-            master_resolution = cropped_intro.size
-            intro_clip.close()
-            cropped_intro.close()
-            logging.info(f"Master resolution set to {master_resolution} based on intro.")
-
-            # 2. Loop through memes for user transform
+            # 1. Loop through memes for user transform
             meme_configs = []
             for i, widget in enumerate(selected_widgets):
                 self.status_label.setText(f"Status: Downloading image {i+1}/{len(selected_widgets)} for positioning...")
@@ -474,7 +461,7 @@ class CreatorTab(QWidget):
                     f.write(response.content)
 
                 self.status_label.setText(f"Status: Awaiting position for meme {i+1}...")
-                transform_dialog = TransformDialog(image_path, master_resolution, self)
+                transform_dialog = TransformDialog(image_path, self)
                 if transform_dialog.exec() == QDialog.DialogCode.Accepted:
                     transform_data = transform_dialog.get_transform()
                     config = widget.meme_data.copy()
@@ -487,10 +474,9 @@ class CreatorTab(QWidget):
                     self._set_ui_enabled(True)
                     return
 
-            # 3. Proceed to voice selection
+            # 2. Proceed to voice selection
             self.settings = settings
             self.meme_configs_for_compilation = meme_configs
-            self.master_resolution_for_compilation = master_resolution
             self.status_label.setText("Status: Fetching available voices...")
             self.fetch_voices_worker = FetchVoicesWorker(api_key=self.settings.get("elevenlabs_api_key"))
             self.fetch_voices_worker.finished.connect(self._on_voices_fetched)
@@ -517,8 +503,7 @@ class CreatorTab(QWidget):
                 self.compile_worker = VideoCompileWorker(
                     self.meme_configs_for_compilation,
                     self.settings,
-                    selected_voice_id,
-                    self.master_resolution_for_compilation
+                    selected_voice_id
                 )
                 self.compile_worker.progress.connect(self._update_status)
                 self.compile_worker.finished.connect(self._on_compilation_finished)

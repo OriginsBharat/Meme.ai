@@ -12,14 +12,40 @@ from moviepy.editor import (
     ColorClip
 )
 import moviepy.video.fx.all as vfx
-from utils import crop_to_portrait
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Standard video resolution
+VIDEO_RESOLUTION = (1080, 1920) # Portrait mode for shorts/reels
+
+def crop_to_portrait(clip):
+    """
+    Crops a video clip to a 9:16 aspect ratio from the center.
+    """
+    original_w, original_h = clip.size
+    target_w, target_h = VIDEO_RESOLUTION
+    target_aspect = target_w / target_h # 9 / 16
+
+    if original_w / original_h > target_aspect:
+        new_w = int(original_h * target_aspect)
+        new_h = original_h
+    else:
+        new_w = original_w
+        new_h = int(original_w / target_aspect)
+
+    return vfx.crop(clip, width=new_w, height=new_h, x_center=original_w/2, y_center=original_h/2)
+
+def resize_frame_for_portrait(frame):
+    """
+    A function to resize a single video frame to the final 1080x1920 resolution.
+    """
+    pil_img = Image.fromarray(frame)
+    resized_pil = pil_img.resize(VIDEO_RESOLUTION, Image.Resampling.LANCZOS)
+    return np.array(resized_pil)
+
 def compile_video(
     meme_data: list[dict],
-    master_resolution: tuple,
     intro_path: str,
     outro_path: str,
     bg_video_path: str,
@@ -36,6 +62,7 @@ def compile_video(
     try:
         # --- 1. Create all video and audio clips ---
         intro_clip = crop_to_portrait(VideoFileClip(intro_path))
+        intro_clip = intro_clip.fl_image(resize_frame_for_portrait)
         all_clips_to_close.append(intro_clip)
 
         meme_clips = []
@@ -81,6 +108,7 @@ def compile_video(
             return None
 
         outro_clip = crop_to_portrait(VideoFileClip(outro_path))
+        outro_clip = outro_clip.fl_image(resize_frame_for_portrait)
         outro_clip = outro_clip.set_start(current_time)
         all_clips_to_close.append(outro_clip)
 
@@ -93,6 +121,7 @@ def compile_video(
         else:
             bg_video_clip = bg_video_clip.subclip(0, total_duration)
         bg_video_clip = crop_to_portrait(bg_video_clip)
+        bg_video_clip = bg_video_clip.fl_image(resize_frame_for_portrait)
         all_clips_to_close.append(bg_video_clip)
 
         bg_music_clip = AudioFileClip(bg_music_path).volumex(0.1)
@@ -109,7 +138,7 @@ def compile_video(
         # Layer clips: background is first (bottom), then intro, memes, and outro
         final_video = CompositeVideoClip(
             [bg_video_clip, intro_clip] + meme_clips + [outro_clip],
-            size=master_resolution
+            size=VIDEO_RESOLUTION
         )
         final_video.audio = final_audio
         final_video = final_video.set_duration(total_duration)
