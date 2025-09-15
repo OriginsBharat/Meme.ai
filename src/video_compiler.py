@@ -84,20 +84,20 @@ def compile_video(
             # Per user request, duration is TTS length + 0.75s
             image_duration = tts_audio_clip.duration + 0.75
 
-            # --- "Fit Inside" Scaling Logic for Memes ---
+            # --- Manual Resizing and Positioning ---
+            transform = meme.get("transform", {"scale": 1.0, "pos": (0, 0)})
+            scale = transform.get("scale", 1.0)
+            position = transform.get("pos", (0, 0))
+
             with Image.open(image_path) as pil_img:
-                img_w, img_h = pil_img.size
-                container_w, container_h = VIDEO_RESOLUTION
-
-                ratio = min(container_w / img_w, container_h / img_h) * 0.95 # Apply 95% padding
-                new_size = (int(img_w * ratio), int(img_h * ratio))
-
-                # Use the modern Resampling.LANCZOS for high-quality downscaling
+                # Scale the image using Pillow
+                new_size = (int(pil_img.width * scale), int(pil_img.height * scale))
                 resized_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
                 image_array = np.array(resized_img)
 
-            # Create the image clip from the resized image array, preserving transparency
+            # Create the image clip and apply the user-defined position
             img_clip = ImageClip(image_array, duration=image_duration, transparent=True)
+            img_clip = img_clip.set_position(position)
             img_clip = img_clip.set_audio(tts_audio_clip)
 
             meme_clips.append(img_clip)
@@ -108,7 +108,7 @@ def compile_video(
 
         # --- 2. Concatenate Meme Clips into a Single Segment ---
         logging.info("Concatenating individual meme clips.")
-        meme_segment = concatenate_videoclips(meme_clips)
+        meme_segment = concatenate_videoclips(meme_clips).set_position('center')
         meme_segment_duration = meme_segment.duration
 
         # --- 3. Prepare Backgrounds ---
@@ -138,7 +138,7 @@ def compile_video(
         combined_audio = CompositeAudioClip([meme_segment.audio, bg_music_clip])
 
         # Place the meme segment on top of the background video
-        final_segment = CompositeVideoClip([bg_video_clip, meme_segment.set_position('center')])
+        final_segment = CompositeVideoClip([bg_video_clip, meme_segment])
         final_segment.audio = combined_audio
 
         # --- 5. Add Intro and Outro ---

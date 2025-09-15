@@ -145,15 +145,16 @@ from youtube_uploader import upload_video
 from used_memes_manager import add_used_meme_ids
 from ui_upload_dialog import UploadDialog
 from ui_settings_tab import save_settings
+from ui_transform_dialog import TransformDialog
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str, list) # video_path, temp_dir, processed_meme_data
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, selected_widgets, settings, voice_id):
+    def __init__(self, meme_configs, settings, voice_id):
         super().__init__()
-        self.selected_widgets = selected_widgets
+        self.meme_configs = meme_configs
         self.settings = settings
         self.voice_id = voice_id
 
@@ -169,22 +170,14 @@ class VideoCompileWorker(QThread):
             tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
 
             processed_meme_data = []
-            total_memes = len(self.selected_widgets)
+            total_memes = len(self.meme_configs)
 
-            for i, widget in enumerate(self.selected_widgets):
-                self.progress.emit(f"Meme {i+1}/{total_memes}: Downloading image...")
-                response = requests.get(widget.meme_data['url'])
-                response.raise_for_status()
-
-                ext = os.path.splitext(widget.meme_data['url'])[1] or '.png'
-                image_filename = os.path.join(temp_dir, f"img_{i}{ext}")
-                with open(image_filename, 'wb') as f: f.write(response.content)
-
+            for i, config in enumerate(self.meme_configs):
                 self.progress.emit(f"Meme {i+1}/{total_memes}: Running OCR...")
-                text = extract_text_from_image(image_filename)
+                text = extract_text_from_image(config['image_path'])
 
                 if not text:
-                    logging.warning(f"No text for meme {widget.meme_data['title']}.")
+                    logging.warning(f"No text for meme {config['title']}. Skipping.")
                     continue
 
                 self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS...")
@@ -195,7 +188,9 @@ class VideoCompileWorker(QThread):
                     voice=self.voice_id
                 )
 
-                processed_meme_data.append({'image_path': image_filename, 'tts_audio_path': audio_filename})
+                # Add the new audio path to the config
+                config['tts_audio_path'] = audio_filename
+                processed_meme_data.append(config)
 
             if not processed_meme_data:
                 self.error.emit("Compilation failed: Could not find any text in the selected images. Please try different memes.")
@@ -442,15 +437,51 @@ class CreatorTab(QWidget):
 
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
-        self.widgets_for_compilation = selected_widgets
-        self.settings = settings # Store settings for later use
+        self.status_label.setText("Status: Preparing for transform...")
 
-        # Start the process by fetching available voices
-        self.status_label.setText("Status: Fetching available voices...")
-        self.fetch_voices_worker = FetchVoicesWorker(api_key=self.settings.get("elevenlabs_api_key"))
-        self.fetch_voices_worker.finished.connect(self._on_voices_fetched)
-        self.fetch_voices_worker.error.connect(self._handle_error)
-        self.fetch_voices_worker.start()
+        # This will now be a synchronous loop that shows a dialog for each meme
+        temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
+        meme_configs = []
+        try:
+            for i, widget in enumerate(selected_widgets):
+                self.status_label.setText(f"Status: Downloading image {i+1}/{len(selected_widgets)} for positioning...")
+
+                # Download image synchronously for the dialog
+                response = requests.get(widget.meme_data['url'])
+                response.raise_for_status()
+                ext = os.path.splitext(widget.meme_data['url'])[1] or '.png'
+                image_path = os.path.join(temp_dir, f"img_{i}{ext}")
+                with open(image_path, 'wb') as f:
+                    f.write(response.content)
+
+                # Open the transform dialog
+                self.status_label.setText(f"Status: Awaiting position for meme {i+1}...")
+                transform_dialog = TransformDialog(image_path, self)
+                if transform_dialog.exec() == QDialog.DialogCode.Accepted:
+                    transform_data = transform_dialog.get_transform()
+                    config = widget.meme_data.copy()
+                    config['image_path'] = image_path
+                    config['transform'] = transform_data
+                    meme_configs.append(config)
+                else:
+                    # User cancelled
+                    self.status_label.setText("Status: Compilation cancelled.")
+                    shutil.rmtree(temp_dir)
+                    self._set_ui_enabled(True)
+                    return
+
+            # After all memes are positioned, proceed to voice selection
+            self.settings = settings
+            self.meme_configs_for_compilation = meme_configs
+            self.status_label.setText("Status: Fetching available voices...")
+            self.fetch_voices_worker = FetchVoicesWorker(api_key=self.settings.get("elevenlabs_api_key"))
+            self.fetch_voices_worker.finished.connect(self._on_voices_fetched)
+            self.fetch_voices_worker.error.connect(self._handle_error)
+            self.fetch_voices_worker.start()
+
+        except Exception as e:
+            self._handle_error(f"Failed during pre-compilation: {e}")
+            shutil.rmtree(temp_dir)
 
     def _on_voices_fetched(self, voices):
         """Handles the fetched voices and opens the selection dialog."""
@@ -463,8 +494,8 @@ class CreatorTab(QWidget):
             selected_voice_id = dialog.get_selected_voice_id()
             if selected_voice_id:
                 self.status_label.setText("Status: Starting compilation...")
-                # Now start the actual video compilation with the selected voice
-                self.compile_worker = VideoCompileWorker(self.widgets_for_compilation, self.settings, selected_voice_id)
+                # Now start the actual video compilation with the selected voice and configs
+                self.compile_worker = VideoCompileWorker(self.meme_configs_for_compilation, self.settings, selected_voice_id)
                 self.compile_worker.progress.connect(self._update_status)
                 self.compile_worker.finished.connect(self._on_compilation_finished)
                 self.compile_worker.error.connect(self._handle_error)
