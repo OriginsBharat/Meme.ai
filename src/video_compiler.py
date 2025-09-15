@@ -122,7 +122,8 @@ def compile_video(
             audio_codec='aac',
             fps=24,
             threads=4,
-            logger='bar'
+            logger='bar',
+            ffmpeg_params=['-pix_fmt', 'yuv420p'] # For maximum compatibility
         )
         logging.info("Video compilation completed successfully.")
         return output_path
