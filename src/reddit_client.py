@@ -1,5 +1,6 @@
 import praw
 import logging
+import random
 from used_memes_manager import get_used_meme_ids
 
 # Configure logging
@@ -97,4 +98,9 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
             continue
 
     logging.info(f"Found a total of {len(found_memes)} memes matching the criteria.")
+
+    # Shuffle the collected memes before returning them to ensure a different
+    # set is shown to the user each time they click "Refresh".
+    random.shuffle(found_memes)
+
     return found_memes[:total_limit]
