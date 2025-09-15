@@ -1,9 +1,9 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGraphicsView, QGraphicsScene,
-    QGraphicsPixmapItem, QSlider, QPushButton, QLabel
+    QGraphicsPixmapItem, QSlider, QPushButton, QLabel, QGraphicsRectItem
 )
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QPixmap, QColor
+from PyQt6.QtGui import QPixmap, QColor, QPen
 
 class TransformDialog(QDialog):
     """
@@ -23,9 +23,16 @@ class TransformDialog(QDialog):
         # --- UI Widgets ---
         self.scene = QGraphicsScene()
         self.scene.setBackgroundBrush(QColor("black"))
+        self.scene.setSceneRect(0, 0, 1080, 1920)
+
+        # Add the dotted reference outline
+        outline = QGraphicsRectItem(self.scene.sceneRect())
+        pen = QPen(Qt.GlobalColor.white)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        outline.setPen(pen)
+        self.scene.addItem(outline)
 
         self.view = QGraphicsView(self.scene)
-        self.scene.setSceneRect(0, 0, 1080, 1920)
 
         self.image_item = QGraphicsPixmapItem(self.image_pixmap)
         self.image_item.setFlag(QGraphicsPixmapItem.GraphicsItemFlag.ItemIsMovable)

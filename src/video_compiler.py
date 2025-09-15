@@ -130,7 +130,7 @@ def compile_video(
         else:
             bg_music_clip = bg_music_clip.loop(duration=meme_segment_duration)
         # Lower the volume of background music to not overpower TTS
-        bg_music_clip = bg_music_clip.volumex(0.2)
+        bg_music_clip = bg_music_clip.volumex(0.1)
 
         # --- 4. Composite Meme Segment with Backgrounds ---
         logging.info("Compositing meme segment with backgrounds.")
