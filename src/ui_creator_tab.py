@@ -146,6 +146,7 @@ from used_memes_manager import add_used_meme_ids
 from ui_upload_dialog import UploadDialog
 from ui_settings_tab import save_settings
 from ui_transform_dialog import TransformDialog
+from ui_ocr_edit_dialog import OcrEditDialog
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str, list) # video_path, temp_dir, processed_meme_data
@@ -159,36 +160,30 @@ class VideoCompileWorker(QThread):
         self.voice_id = voice_id
 
     def run(self):
-        # The temp dir is now created in _start_compilation, but we need a reference to it
-        # This is a bit of a workaround. A better way would be to pass the path.
-        # For now, we'll extract it from one of the image paths.
         if not self.meme_configs:
             self.error.emit("No memes to compile.")
             return
+        # Get the temporary directory from one of the image paths.
         temp_dir = os.path.dirname(self.meme_configs[0]['image_path'])
 
         try:
-            # Configure Tesseract and TTS services
-            configure_tessdata(self.settings.get("tessdata_path"))
-            if not configure_tesseract(self.settings.get("tesseract_path")):
-                raise RuntimeError("Tesseract executable not configured. Check path in Settings.")
+            # TTS service is still needed, but OCR is now done before this worker starts.
             tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
 
             processed_meme_data = []
             total_memes = len(self.meme_configs)
 
             for i, config in enumerate(self.meme_configs):
-                self.progress.emit(f"Meme {i+1}/{total_memes}: Running OCR...")
-                text = extract_text_from_image(config['image_path'])
+                # Get the user-corrected text from the config dictionary.
+                text = config.get('text', '')
 
                 if not text:
-                    logging.warning(f"No text for meme {config['title']}. Skipping.")
-                    # Still include it in the video, just without audio
+                    logging.warning(f"No text for meme '{config['title']}'. Skipping TTS for this meme.")
                     config['tts_audio_path'] = None
                     processed_meme_data.append(config)
                     continue
 
-                self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS...")
+                self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS audio...")
                 audio_filename = os.path.join(temp_dir, f"tts_{i}.mp3")
                 tts_manager.generate_tts_audio(
                     text_to_speak=text,
@@ -222,7 +217,9 @@ class VideoCompileWorker(QThread):
 
         except Exception as e:
             logging.error(f"Error in VideoCompileWorker: {e}", exc_info=True)
-            shutil.rmtree(temp_dir) # Clean up on error
+            # Ensure temp directory is cleaned up on error
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
             self.error.emit(str(e))
 
 class YouTubeUploadWorker(QThread):
@@ -442,16 +439,23 @@ class CreatorTab(QWidget):
             QMessageBox.warning(self, "No Memes Selected", "Please select at least one meme.")
             return
 
+        # Configure Tesseract before starting the loop, as it only needs to be done once.
+        configure_tessdata(settings.get("tessdata_path"))
+        if not configure_tesseract(settings.get("tesseract_path")):
+            self._handle_error("Tesseract executable not configured. Check path in Settings.")
+            return
+
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
 
-        # --- Simplified Workflow with Fixed Resolution ---
         temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
         try:
-            # 1. Loop through memes for user transform
+            # --- Pre-compilation interactive stage (Transform and OCR) ---
             meme_configs = []
             for i, widget in enumerate(selected_widgets):
-                self.status_label.setText(f"Status: Downloading image {i+1}/{len(selected_widgets)} for positioning...")
+                # A. Download the full-resolution image for processing
+                self.status_label.setText(f"Status: Downloading image {i+1}/{len(selected_widgets)}...")
+                QApplication.processEvents() # Force the UI to update the status label
 
                 response = requests.get(widget.meme_data['url'])
                 response.raise_for_status()
@@ -460,21 +464,38 @@ class CreatorTab(QWidget):
                 with open(image_path, 'wb') as f:
                     f.write(response.content)
 
+                # B. Show the transform/positioning dialog
                 self.status_label.setText(f"Status: Awaiting position for meme {i+1}...")
                 transform_dialog = TransformDialog(image_path, self)
-                if transform_dialog.exec() == QDialog.DialogCode.Accepted:
-                    transform_data = transform_dialog.get_transform()
-                    config = widget.meme_data.copy()
-                    config['image_path'] = image_path
-                    config['transform'] = transform_data
-                    meme_configs.append(config)
-                else:
+                if transform_dialog.exec() != QDialog.DialogCode.Accepted:
                     self.status_label.setText("Status: Compilation cancelled.")
                     shutil.rmtree(temp_dir)
                     self._set_ui_enabled(True)
                     return
+                transform_data = transform_dialog.get_transform()
 
-            # 2. Proceed to voice selection
+                # C. Run OCR and show the text editing dialog
+                self.status_label.setText(f"Status: Reading text from meme {i+1}...")
+                QApplication.processEvents()
+                extracted_text = extract_text_from_image(image_path)
+
+                self.status_label.setText(f"Status: Awaiting text correction for meme {i+1}...")
+                ocr_dialog = OcrEditDialog(extracted_text, self)
+                if ocr_dialog.exec() != QDialog.DialogCode.Accepted:
+                    self.status_label.setText("Status: Compilation cancelled.")
+                    shutil.rmtree(temp_dir)
+                    self._set_ui_enabled(True)
+                    return
+                corrected_text = ocr_dialog.get_text()
+
+                # D. Store all the collected data for this meme
+                config = widget.meme_data.copy()
+                config['image_path'] = image_path
+                config['transform'] = transform_data
+                config['text'] = corrected_text # Use the user-verified text
+                meme_configs.append(config)
+
+            # --- Post-interactive stage (Voice selection and background processing) ---
             self.settings = settings
             self.meme_configs_for_compilation = meme_configs
             self.status_label.setText("Status: Fetching available voices...")
