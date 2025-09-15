@@ -25,7 +25,6 @@ class TransformDialog(QDialog):
         self.scene.setBackgroundBrush(QColor("black"))
 
         self.view = QGraphicsView(self.scene)
-        self.view.setFixedSize(540 + 2, 960 + 2) # Half size of 1080x1920 for manageability
         self.scene.setSceneRect(0, 0, 1080, 1920)
 
         self.image_item = QGraphicsPixmapItem(self.image_pixmap)
@@ -63,6 +62,18 @@ class TransformDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
         button_layout.addWidget(self.next_button)
         main_layout.addLayout(button_layout)
+
+        self.resize(560, 1000) # Set a reasonable default size
+
+    def showEvent(self, event):
+        """Fit the scene in the view when the dialog is first shown."""
+        super().showEvent(event)
+        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def resizeEvent(self, event):
+        """Fit the scene in the view whenever the dialog is resized."""
+        super().resizeEvent(event)
+        self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def _set_scale(self, value):
         """Applies scale to the graphics item."""
