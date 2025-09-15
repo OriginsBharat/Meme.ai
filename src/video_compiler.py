@@ -89,7 +89,7 @@ def compile_video(
                 img_w, img_h = pil_img.size
                 container_w, container_h = VIDEO_RESOLUTION
 
-                ratio = min(container_w / img_w, container_h / img_h)
+                ratio = min(container_w / img_w, container_h / img_h) * 0.95 # Apply 95% padding
                 new_size = (int(img_w * ratio), int(img_h * ratio))
 
                 # Use the modern Resampling.LANCZOS for high-quality downscaling
