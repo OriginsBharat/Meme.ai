@@ -9,7 +9,7 @@ class TransformDialog(QDialog):
     """
     An interactive dialog to let the user position and scale a meme image.
     """
-    def __init__(self, image_path, parent=None):
+    def __init__(self, image_path, master_resolution, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Position and Scale Meme")
 
@@ -23,7 +23,7 @@ class TransformDialog(QDialog):
         # --- UI Widgets ---
         self.scene = QGraphicsScene()
         self.scene.setBackgroundBrush(QColor("black"))
-        self.scene.setSceneRect(0, 0, 1080, 1920)
+        self.scene.setSceneRect(0, 0, master_resolution[0], master_resolution[1])
 
         # Add the dotted reference outline
         outline = QGraphicsRectItem(self.scene.sceneRect())

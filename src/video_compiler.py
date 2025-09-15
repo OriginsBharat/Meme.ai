@@ -12,32 +12,14 @@ from moviepy.editor import (
     ColorClip
 )
 import moviepy.video.fx.all as vfx
+from utils import crop_to_portrait
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Standard video resolution
-VIDEO_RESOLUTION = (1080, 1920) # Portrait mode for shorts/reels
-
-def crop_to_portrait(clip):
-    """
-    Crops a video clip to a 9:16 aspect ratio from the center.
-    """
-    original_w, original_h = clip.size
-    target_w, target_h = VIDEO_RESOLUTION
-    target_aspect = target_w / target_h # 9 / 16
-
-    if original_w / original_h > target_aspect:
-        new_w = int(original_h * target_aspect)
-        new_h = original_h
-    else:
-        new_w = original_w
-        new_h = int(original_w / target_aspect)
-
-    return vfx.crop(clip, width=new_w, height=new_h, x_center=original_w/2, y_center=original_h/2)
-
 def compile_video(
     meme_data: list[dict],
+    master_resolution: tuple,
     intro_path: str,
     outro_path: str,
     bg_video_path: str,
@@ -127,7 +109,7 @@ def compile_video(
         # Layer clips: background is first (bottom), then intro, memes, and outro
         final_video = CompositeVideoClip(
             [bg_video_clip, intro_clip] + meme_clips + [outro_clip],
-            size=VIDEO_RESOLUTION
+            size=master_resolution
         )
         final_video.audio = final_audio
         final_video = final_video.set_duration(total_duration)

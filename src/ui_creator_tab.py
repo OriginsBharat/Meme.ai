@@ -146,23 +146,31 @@ from used_memes_manager import add_used_meme_ids
 from ui_upload_dialog import UploadDialog
 from ui_settings_tab import save_settings
 from ui_transform_dialog import TransformDialog
+from utils import crop_to_portrait
+from moviepy.editor import VideoFileClip
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str, list) # video_path, temp_dir, processed_meme_data
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, meme_configs, settings, voice_id):
+    def __init__(self, meme_configs, settings, voice_id, master_resolution):
         super().__init__()
         self.meme_configs = meme_configs
         self.settings = settings
         self.voice_id = voice_id
+        self.master_resolution = master_resolution
 
     def run(self):
-        temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
-        try:
-            self.progress.emit(f"Created temporary directory...")
+        # The temp dir is now created in _start_compilation, but we need a reference to it
+        # This is a bit of a workaround. A better way would be to pass the path.
+        # For now, we'll extract it from one of the image paths.
+        if not self.meme_configs:
+            self.error.emit("No memes to compile.")
+            return
+        temp_dir = os.path.dirname(self.meme_configs[0]['image_path'])
 
+        try:
             # Configure Tesseract and TTS services
             configure_tessdata(self.settings.get("tessdata_path"))
             if not configure_tesseract(self.settings.get("tesseract_path")):
@@ -178,6 +186,9 @@ class VideoCompileWorker(QThread):
 
                 if not text:
                     logging.warning(f"No text for meme {config['title']}. Skipping.")
+                    # Still include it in the video, just without audio
+                    config['tts_audio_path'] = None
+                    processed_meme_data.append(config)
                     continue
 
                 self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS...")
@@ -188,12 +199,11 @@ class VideoCompileWorker(QThread):
                     voice=self.voice_id
                 )
 
-                # Add the new audio path to the config
                 config['tts_audio_path'] = audio_filename
                 processed_meme_data.append(config)
 
             if not processed_meme_data:
-                self.error.emit("Compilation failed: Could not find any text in the selected images. Please try different memes.")
+                self.error.emit("Compilation failed: No memes were processed.")
                 return
 
             self.progress.emit("Compiling final video...")
@@ -201,6 +211,7 @@ class VideoCompileWorker(QThread):
 
             result_path = compile_video(
                 meme_data=processed_meme_data,
+                master_resolution=self.master_resolution,
                 intro_path=self.settings["intro_path"],
                 outro_path=self.settings["outro_path"],
                 bg_video_path=self.settings["bg_video_path"],
@@ -437,16 +448,24 @@ class CreatorTab(QWidget):
 
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
-        self.status_label.setText("Status: Preparing for transform...")
 
-        # This will now be a synchronous loop that shows a dialog for each meme
+        # --- New Dynamic Resolution Workflow ---
         temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
-        meme_configs = []
         try:
+            # 1. Determine Master Resolution from Intro
+            self.status_label.setText("Status: Analyzing intro video...")
+            intro_clip = VideoFileClip(settings["intro_path"])
+            cropped_intro = crop_to_portrait(intro_clip)
+            master_resolution = cropped_intro.size
+            intro_clip.close()
+            cropped_intro.close()
+            logging.info(f"Master resolution set to {master_resolution} based on intro.")
+
+            # 2. Loop through memes for user transform
+            meme_configs = []
             for i, widget in enumerate(selected_widgets):
                 self.status_label.setText(f"Status: Downloading image {i+1}/{len(selected_widgets)} for positioning...")
 
-                # Download image synchronously for the dialog
                 response = requests.get(widget.meme_data['url'])
                 response.raise_for_status()
                 ext = os.path.splitext(widget.meme_data['url'])[1] or '.png'
@@ -454,9 +473,8 @@ class CreatorTab(QWidget):
                 with open(image_path, 'wb') as f:
                     f.write(response.content)
 
-                # Open the transform dialog
                 self.status_label.setText(f"Status: Awaiting position for meme {i+1}...")
-                transform_dialog = TransformDialog(image_path, self)
+                transform_dialog = TransformDialog(image_path, master_resolution, self)
                 if transform_dialog.exec() == QDialog.DialogCode.Accepted:
                     transform_data = transform_dialog.get_transform()
                     config = widget.meme_data.copy()
@@ -464,15 +482,15 @@ class CreatorTab(QWidget):
                     config['transform'] = transform_data
                     meme_configs.append(config)
                 else:
-                    # User cancelled
                     self.status_label.setText("Status: Compilation cancelled.")
                     shutil.rmtree(temp_dir)
                     self._set_ui_enabled(True)
                     return
 
-            # After all memes are positioned, proceed to voice selection
+            # 3. Proceed to voice selection
             self.settings = settings
             self.meme_configs_for_compilation = meme_configs
+            self.master_resolution_for_compilation = master_resolution
             self.status_label.setText("Status: Fetching available voices...")
             self.fetch_voices_worker = FetchVoicesWorker(api_key=self.settings.get("elevenlabs_api_key"))
             self.fetch_voices_worker.finished.connect(self._on_voices_fetched)
@@ -480,8 +498,9 @@ class CreatorTab(QWidget):
             self.fetch_voices_worker.start()
 
         except Exception as e:
-            self._handle_error(f"Failed during pre-compilation: {e}")
-            shutil.rmtree(temp_dir)
+            self._handle_error(f"Failed during pre-compilation setup: {e}")
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
     def _on_voices_fetched(self, voices):
         """Handles the fetched voices and opens the selection dialog."""
@@ -494,8 +513,13 @@ class CreatorTab(QWidget):
             selected_voice_id = dialog.get_selected_voice_id()
             if selected_voice_id:
                 self.status_label.setText("Status: Starting compilation...")
-                # Now start the actual video compilation with the selected voice and configs
-                self.compile_worker = VideoCompileWorker(self.meme_configs_for_compilation, self.settings, selected_voice_id)
+                # Now start the actual video compilation with all the final data
+                self.compile_worker = VideoCompileWorker(
+                    self.meme_configs_for_compilation,
+                    self.settings,
+                    selected_voice_id,
+                    self.master_resolution_for_compilation
+                )
                 self.compile_worker.progress.connect(self._update_status)
                 self.compile_worker.finished.connect(self._on_compilation_finished)
                 self.compile_worker.error.connect(self._handle_error)
