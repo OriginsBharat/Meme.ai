@@ -27,13 +27,10 @@ def crop_to_portrait(clip):
     target_w, target_h = VIDEO_RESOLUTION
     target_aspect = target_w / target_h # 9 / 16
 
-    # Calculate the new dimensions for cropping
     if original_w / original_h > target_aspect:
-        # Original is wider than target -> crop width
         new_w = int(original_h * target_aspect)
         new_h = original_h
     else:
-        # Original is taller than target -> crop height
         new_w = original_w
         new_h = int(original_w / target_aspect)
 
@@ -48,115 +45,102 @@ def compile_video(
     output_path: str
 ) -> str | None:
     """
-    Compiles a final video from memes, audio, and other assets.
-
-    Args:
-        meme_data (list[dict]): A list of dictionaries, each containing 'image_path'
-                                and 'tts_audio_path' for a meme.
-        intro_path (str): Path to the intro video file.
-        outro_path (str): Path to the outro video file.
-        bg_video_path (str): Path to the background gameplay video file.
-        bg_music_path (str): Path to the background music audio file.
-        output_path (str): The destination path for the final compiled video.
-
-    Returns:
-        str | None: The path to the final video if successful, otherwise None.
+    Compiles a final video from memes, audio, and other assets using a layer-based approach.
     """
-    logging.info("Starting video compilation process.")
+    logging.info("Starting video compilation process (layer-based architecture).")
 
-    audio_clips = []
+    # Keep track of all created clips to ensure they are closed
+    all_clips_to_close = []
     try:
-        # --- 1. Create Clips for Each Meme ---
+        # --- 1. Create all video and audio clips ---
+        intro_clip = crop_to_portrait(VideoFileClip(intro_path))
+        all_clips_to_close.append(intro_clip)
+
         meme_clips = []
-        for meme in meme_data:
-            image_path = meme.get('image_path')
-            audio_path = meme.get('tts_audio_path')
+        meme_audio_clips = []
+        current_time = intro_clip.duration
+
+        for meme_config in meme_data:
+            image_path = meme_config.get('image_path')
+            audio_path = meme_config.get('tts_audio_path')
+            transform = meme_config.get("transform", {"scale": 1.0, "pos": (0, 0)})
 
             if not all([image_path, audio_path, os.path.exists(image_path), os.path.exists(audio_path)]):
-                logging.warning(f"Skipping meme due to missing file: image='{image_path}', audio='{audio_path}'")
+                logging.warning(f"Skipping meme due to missing file: {meme_config.get('title')}")
                 continue
 
-            logging.info(f"Processing meme: {os.path.basename(image_path)}")
+            # Create audio clip to get duration
+            tts_audio = AudioFileClip(audio_path)
+            all_clips_to_close.append(tts_audio)
 
-            # Load the TTS audio to determine its duration
-            tts_audio_clip = AudioFileClip(audio_path)
-            audio_clips.append(tts_audio_clip)
-            # Per user request, duration is TTS length + 0.75s
-            image_duration = tts_audio_clip.duration + 0.75
+            clip_duration = tts_audio.duration + 0.75
 
-            # --- Manual Resizing and Positioning ---
-            transform = meme.get("transform", {"scale": 1.0, "pos": (0, 0)})
-            scale = transform.get("scale", 1.0)
-            position = transform.get("pos", (0, 0))
-
+            # Create image clip with user's transform
             with Image.open(image_path) as pil_img:
-                # Scale the image using Pillow
+                scale = transform.get("scale", 1.0)
                 new_size = (int(pil_img.width * scale), int(pil_img.height * scale))
                 resized_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
                 image_array = np.array(resized_img)
 
-            # Create the image clip and apply the user-defined position
-            img_clip = ImageClip(image_array, duration=image_duration, transparent=True)
-            img_clip = img_clip.set_position(position)
-            img_clip = img_clip.set_audio(tts_audio_clip)
-
+            img_clip = ImageClip(image_array, duration=clip_duration, transparent=True)
+            img_clip = img_clip.set_position(transform.get("pos", (0,0)))
+            img_clip = img_clip.set_start(current_time)
+            all_clips_to_close.append(img_clip)
             meme_clips.append(img_clip)
+
+            # Set start time for audio as well
+            tts_audio = tts_audio.set_start(current_time)
+            meme_audio_clips.append(tts_audio)
+
+            current_time += clip_duration
 
         if not meme_clips:
             logging.error("No valid meme clips could be created. Aborting compilation.")
             return None
 
-        # --- 2. Concatenate Meme Clips into a Single Segment ---
-        logging.info("Concatenating individual meme clips.")
-        meme_segment = concatenate_videoclips(meme_clips).set_position('center')
-        meme_segment_duration = meme_segment.duration
-
-        # --- 3. Prepare Backgrounds ---
-        logging.info("Preparing background video and music.")
-        # Load background video and trim/loop to match meme segment duration
-        bg_video_clip = VideoFileClip(bg_video_path).without_audio()
-        if bg_video_clip.duration > meme_segment_duration:
-            bg_video_clip = bg_video_clip.subclip(0, meme_segment_duration)
-        else:
-            bg_video_clip = bg_video_clip.loop(duration=meme_segment_duration)
-
-        # Crop the background to the target 9:16 aspect ratio
-        bg_video_clip = crop_to_portrait(bg_video_clip)
-
-        # Load background music and trim/loop
-        bg_music_clip = AudioFileClip(bg_music_path)
-        if bg_music_clip.duration > meme_segment_duration:
-            bg_music_clip = bg_music_clip.subclip(0, meme_segment_duration)
-        else:
-            bg_music_clip = bg_music_clip.loop(duration=meme_segment_duration)
-        # Lower the volume of background music to not overpower TTS
-        bg_music_clip = bg_music_clip.volumex(0.1)
-
-        # --- 4. Composite Meme Segment with Backgrounds ---
-        logging.info("Compositing meme segment with backgrounds.")
-        # Combine the TTS audio from the meme segment with the background music
-        combined_audio = CompositeAudioClip([meme_segment.audio, bg_music_clip])
-
-        # Place the meme segment on top of the background video
-        final_segment = CompositeVideoClip([bg_video_clip, meme_segment])
-        final_segment.audio = combined_audio
-
-        # --- 5. Add Intro and Outro ---
-        logging.info("Adding intro and outro.")
-        intro_clip = crop_to_portrait(VideoFileClip(intro_path))
         outro_clip = crop_to_portrait(VideoFileClip(outro_path))
+        outro_clip = outro_clip.set_start(current_time)
+        all_clips_to_close.append(outro_clip)
 
-        final_video = concatenate_videoclips([intro_clip, final_segment, outro_clip])
+        total_duration = current_time + outro_clip.duration
 
-        # --- 6. Write Final Video to File ---
+        # --- 2. Prepare Backgrounds for the total duration ---
+        bg_video_clip = VideoFileClip(bg_video_path).without_audio()
+        if bg_video_clip.duration < total_duration:
+            bg_video_clip = bg_video_clip.loop(duration=total_duration)
+        else:
+            bg_video_clip = bg_video_clip.subclip(0, total_duration)
+        bg_video_clip = crop_to_portrait(bg_video_clip)
+        all_clips_to_close.append(bg_video_clip)
+
+        bg_music_clip = AudioFileClip(bg_music_path).volumex(0.1)
+        if bg_music_clip.duration < total_duration:
+            bg_music_clip = bg_music_clip.loop(duration=total_duration)
+        else:
+            bg_music_clip = bg_music_clip.subclip(0, total_duration)
+        all_clips_to_close.append(bg_music_clip)
+
+        # --- 3. Composite Everything Together ---
+        logging.info("Compositing all layers...")
+        final_audio = CompositeAudioClip(meme_audio_clips + [bg_music_clip])
+
+        # Layer clips: background is first (bottom), then intro, memes, and outro
+        final_video = CompositeVideoClip(
+            [bg_video_clip, intro_clip] + meme_clips + [outro_clip],
+            size=VIDEO_RESOLUTION
+        )
+        final_video.audio = final_audio
+        final_video = final_video.set_duration(total_duration)
+
+        # --- 4. Write Final Video to File ---
         logging.info(f"Writing final video to {output_path}")
         final_video.write_videofile(
             output_path,
             codec='libx264',
             audio_codec='aac',
             fps=24,
-            threads=4, # Use multiple threads for faster writing
-            logger='bar' # Show a progress bar
+            threads=4,
+            logger='bar'
         )
         logging.info("Video compilation completed successfully.")
         return output_path
@@ -165,17 +149,13 @@ def compile_video(
         logging.error(f"An unexpected error occurred during video compilation: {e}", exc_info=True)
         return None
     finally:
-        # --- 7. Clean up all file handles ---
-        logging.info("Closing all audio and video file handles.")
-        for clip in meme_clips:
-            if clip: clip.close()
-        for clip in audio_clips:
-            if clip: clip.close()
-        if 'bg_video_clip' in locals() and bg_video_clip: bg_video_clip.close()
-        if 'bg_music_clip' in locals() and bg_music_clip: bg_music_clip.close()
-        if 'intro_clip' in locals() and intro_clip: intro_clip.close()
-        if 'outro_clip' in locals() and outro_clip: outro_clip.close()
+        # --- 5. Clean up all file handles ---
+        logging.info("Closing all media file handles.")
+        for clip in all_clips_to_close:
+            try:
+                if clip: clip.close()
+            except Exception:
+                pass
 
-        # Clean up moviepy's internal state if needed
         import gc
         gc.collect()
