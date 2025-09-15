@@ -114,7 +114,7 @@ def compile_video(
 
         total_duration = current_time + outro_clip.duration
 
-        # --- 2. Prepare Backgrounds for the total duration ---
+        # --- 2. Prepare Backgrounds and Main Audio Track ---
         bg_video_clip = VideoFileClip(bg_video_path).without_audio()
         if bg_video_clip.duration < total_duration:
             bg_video_clip = bg_video_clip.loop(duration=total_duration)
@@ -124,16 +124,37 @@ def compile_video(
         bg_video_clip = bg_video_clip.fl_image(resize_frame_for_portrait)
         all_clips_to_close.append(bg_video_clip)
 
+        # Prepare background music to start playing *after* the intro finishes.
         bg_music_clip = AudioFileClip(bg_music_path).volumex(0.1)
-        if bg_music_clip.duration < total_duration:
-            bg_music_clip = bg_music_clip.loop(duration=total_duration)
-        else:
-            bg_music_clip = bg_music_clip.subclip(0, total_duration)
-        all_clips_to_close.append(bg_music_clip)
+        intro_duration = intro_clip.duration
+
+        # The background music should run from the end of the intro to the end of the video.
+        bg_music_needed_duration = total_duration - intro_duration
+
+        if bg_music_needed_duration > 0:
+            if bg_music_clip.duration < bg_music_needed_duration:
+                bg_music_clip = bg_music_clip.loop(duration=bg_music_needed_duration)
+            else:
+                bg_music_clip = bg_music_clip.subclip(0, bg_music_needed_duration)
+
+            bg_music_clip = bg_music_clip.set_start(intro_duration)
+            all_clips_to_close.append(bg_music_clip)
 
         # --- 3. Composite Everything Together ---
         logging.info("Compositing all layers...")
-        final_audio = CompositeAudioClip(meme_audio_clips + [bg_music_clip])
+
+        # Explicitly get audio from intro and outro clips.
+        # The .audio attribute of a transformed clip (e.g., set_start) is also transformed.
+        intro_audio = intro_clip.audio
+        outro_audio = outro_clip.audio
+        all_clips_to_close.extend([intro_audio, outro_audio])
+
+        # Combine all audio sources: the main track (intro, memes, outro) and the background music.
+        audio_sources = [intro_audio, outro_audio] + meme_audio_clips
+        if bg_music_needed_duration > 0:
+            audio_sources.append(bg_music_clip)
+
+        final_audio = CompositeAudioClip(audio_sources)
 
         # Layer clips: background is first (bottom), then intro, memes, and outro
         final_video = CompositeVideoClip(
