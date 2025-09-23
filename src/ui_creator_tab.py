@@ -100,23 +100,27 @@ class MemeWidget(QWidget):
 
 # --- Worker Threads ---
 class RedditSearchWorker(QThread):
-    finished = pyqtSignal(list)
+    # The finished signal now emits the list of memes and the 'fullname' of the last post
+    finished = pyqtSignal(list, object) # Using object for str | None type
     error = pyqtSignal(str)
 
-    def __init__(self, settings, keyword):
+    def __init__(self, settings, keyword, after=None):
         super().__init__()
         self.settings = settings
         self.keyword = keyword
+        self.after = after
 
     def run(self):
         try:
-            memes = fetch_reddit_memes(
+            # The fetch function now returns the last post's ID for pagination
+            memes, last_post_fullname = fetch_reddit_memes(
                 client_id=self.settings["reddit_client_id"],
                 client_secret=self.settings["reddit_client_secret"],
                 user_agent=self.settings["reddit_user_agent"],
-                keyword=self.keyword
+                keyword=self.keyword,
+                after=self.after
             )
-            self.finished.emit(memes)
+            self.finished.emit(memes, last_post_fullname)
         except Exception as e:
             logging.error(f"Error in RedditSearchWorker: {e}", exc_info=True)
             self.error.emit(f"Failed to fetch from Reddit: {e}")
@@ -301,6 +305,10 @@ class CreatorTab(QWidget):
         self.widgets_for_compilation = []
         self.last_compilation_data = []
 
+        # State for paginated Reddit search
+        self.last_keyword_searched = ""
+        self.last_post_fullname = None
+
         main_layout = QVBoxLayout(self)
 
         search_layout = QHBoxLayout()
@@ -386,29 +394,68 @@ class CreatorTab(QWidget):
             QMessageBox.warning(self, "Keyword Missing", "Please enter a keyword.")
             return
 
+        # --- Pagination Logic ---
+        # If the keyword is new, it's a new search, so reset pagination.
+        # Otherwise, it's a refresh, so we use the 'after' value from the last search.
+        if keyword != self.last_keyword_searched:
+            logging.info(f"New search detected for keyword '{keyword}'. Resetting pagination.")
+            self.last_keyword_searched = keyword
+            self.last_post_fullname = None # Reset for new search
+            self._clear_grid() # Clear old results for a new search
+            self._show_placeholder_message("Searching for new memes...")
+        else:
+            logging.info(f"Refresh detected for keyword '{keyword}'. Searching after post: {self.last_post_fullname}")
+            # If the user clicks refresh but there are no more pages, inform them.
+            if not self.last_post_fullname:
+                self._handle_error("No more memes found for this keyword. Try a new search.")
+                return
+
         self.search_button.setEnabled(False)
         self.compile_button.setEnabled(False)
-        self.status_label.setText("Status: Searching for memes...")
-        self._show_placeholder_message("Searching...")
+        self.status_label.setText(f"Status: Searching for '{keyword}'...")
 
-        self.search_worker = RedditSearchWorker(settings, keyword)
+        # The worker will now be passed the 'after' parameter for pagination.
+        # This will be None for a new search, or a post ID for a refresh.
+        self.search_worker = RedditSearchWorker(settings, keyword, after=self.last_post_fullname)
         self.search_worker.finished.connect(self._display_memes)
         self.search_worker.error.connect(self._handle_error)
         self.search_worker.start()
 
-    def _display_memes(self, memes):
+    def _display_memes(self, memes, last_post_fullname):
         self.search_button.setEnabled(True)
-        self._clear_grid()
 
+        # Store the fullname of the last post for the next refresh.
+        # If the worker returns None, it means we've reached the end of the results.
+        self.last_post_fullname = last_post_fullname
+
+        # If this was the first search (grid was cleared) and no memes were found.
+        if self.meme_grid_layout.count() == 1 and not memes:
+             placeholder = self.meme_grid_layout.itemAt(0).widget()
+             if isinstance(placeholder, QLabel):
+                placeholder.setText("No memes found matching your criteria. Try another keyword.")
+                self.status_label.setText("Status: No memes found.")
+                return
+
+        # If it was a refresh and no new memes were found.
         if not memes:
-            self._show_placeholder_message("No memes found matching your criteria. Try another keyword.")
-            self.status_label.setText("Status: No memes found.")
+            self.status_label.setText("Status: No more memes found for this keyword.")
             return
 
-        self.status_label.setText(f"Status: Found {len(memes)} memes. Downloading thumbnails...")
-        self.image_downloaders.clear()
+        # If a placeholder message is present, clear it before adding memes.
+        if self.meme_grid_layout.count() == 1:
+            placeholder = self.meme_grid_layout.itemAt(0).widget()
+            if isinstance(placeholder, QLabel):
+                self._clear_grid()
 
-        row, col = 0, 0
+        self.status_label.setText(f"Status: Displaying {len(memes)} new memes. Downloading thumbnails...")
+        self.image_downloaders.clear() # Clear old downloaders to manage memory
+
+        # Calculate starting row and col to append new widgets to the grid
+        num_existing_items = self.meme_grid_layout.count()
+        num_cols = 4
+        row = num_existing_items // num_cols
+        col = num_existing_items % num_cols
+
         for meme_data in memes:
             widget = MemeWidget(meme_data)
             self.meme_grid_layout.addWidget(widget, row, col)
@@ -420,7 +467,7 @@ class CreatorTab(QWidget):
             downloader.start()
 
             col += 1
-            if col >= 4:
+            if col >= num_cols:
                 col = 0
                 row += 1
 
