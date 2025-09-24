@@ -151,6 +151,8 @@ from ui_upload_dialog import UploadDialog
 from ui_settings_tab import save_settings
 from ui_transform_dialog import TransformDialog
 from ui_ocr_edit_dialog import OcrEditDialog
+from video_downloader import download_video
+from moviepy.editor import VideoFileClip
 
 class VideoCompileWorker(QThread):
     finished = pyqtSignal(str, str, list) # video_path, temp_dir, processed_meme_data
@@ -473,6 +475,17 @@ class CreatorTab(QWidget):
 
         self.compile_button.setEnabled(True)
 
+    def _extract_frame(self, video_path, output_dir):
+        """Extracts the first frame of a video to use as a thumbnail."""
+        try:
+            with VideoFileClip(video_path) as clip:
+                frame_path = os.path.join(output_dir, f"thumb_{uuid.uuid4().hex}.png")
+                clip.save_frame(frame_path, t=0) # Save frame at t=0 seconds
+            return frame_path
+        except Exception as e:
+            logging.error(f"Failed to extract frame from {video_path}: {e}")
+            return None
+
     def _start_compilation(self):
         settings = self._load_settings()
         required = ["tesseract_path", "elevenlabs_api_key", "intro_path", "outro_path", "bg_video_path", "bg_music_path"]
@@ -486,7 +499,7 @@ class CreatorTab(QWidget):
             QMessageBox.warning(self, "No Memes Selected", "Please select at least one meme.")
             return
 
-        # Configure Tesseract before starting the loop, as it only needs to be done once.
+        # Configure Tesseract once before the loop
         configure_tessdata(settings.get("tessdata_path"))
         if not configure_tesseract(settings.get("tesseract_path")):
             self._handle_error("Tesseract executable not configured. Check path in Settings.")
@@ -497,52 +510,71 @@ class CreatorTab(QWidget):
 
         temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
         try:
-            # --- Pre-compilation interactive stage (Transform and OCR) ---
             meme_configs = []
             for i, widget in enumerate(selected_widgets):
-                # A. Download the full-resolution image for processing
-                self.status_label.setText(f"Status: Downloading image {i+1}/{len(selected_widgets)}...")
-                QApplication.processEvents() # Force the UI to update the status label
-
-                response = requests.get(widget.meme_data['url'])
-                response.raise_for_status()
-                ext = os.path.splitext(widget.meme_data['url'])[1] or '.png'
-                image_path = os.path.join(temp_dir, f"img_{i}{ext}")
-                with open(image_path, 'wb') as f:
-                    f.write(response.content)
-
-                # B. Show the transform/positioning dialog
-                self.status_label.setText(f"Status: Awaiting position for meme {i+1}...")
-                transform_dialog = TransformDialog(image_path, self)
-                if transform_dialog.exec() != QDialog.DialogCode.Accepted:
-                    self.status_label.setText("Status: Compilation cancelled.")
-                    shutil.rmtree(temp_dir)
-                    self._set_ui_enabled(True)
-                    return
-                transform_data = transform_dialog.get_transform()
-
-                # C. Run OCR and show the text editing dialog
-                self.status_label.setText(f"Status: Reading text from meme {i+1}...")
-                QApplication.processEvents()
-                extracted_text = extract_text_from_image(image_path)
-
-                self.status_label.setText(f"Status: Awaiting text correction for meme {i+1}...")
-                ocr_dialog = OcrEditDialog(extracted_text, self)
-                if ocr_dialog.exec() != QDialog.DialogCode.Accepted:
-                    self.status_label.setText("Status: Compilation cancelled.")
-                    shutil.rmtree(temp_dir)
-                    self._set_ui_enabled(True)
-                    return
-                corrected_text = ocr_dialog.get_text()
-
-                # D. Store all the collected data for this meme
                 config = widget.meme_data.copy()
-                config['image_path'] = image_path
-                config['transform'] = transform_data
-                config['text'] = corrected_text # Use the user-verified text
+                media_type = config.get('type', 'image')
+
+                self.status_label.setText(f"Status: Processing {media_type} {i+1}/{len(selected_widgets)}...")
+                QApplication.processEvents()
+
+                # This path will point to a static image for the transform dialog
+                path_for_transform_dialog = None
+
+                if media_type == 'image':
+                    self.status_label.setText(f"Status: Downloading image {i+1}...")
+                    QApplication.processEvents()
+                    response = requests.get(config['url'])
+                    response.raise_for_status()
+                    ext = os.path.splitext(config['url'])[1] or '.png'
+                    image_path = os.path.join(temp_dir, f"img_{i}{ext}")
+                    with open(image_path, 'wb') as f:
+                        f.write(response.content)
+                    config['image_path'] = image_path
+                    path_for_transform_dialog = image_path
+
+                elif media_type == 'video':
+                    self.status_label.setText(f"Status: Downloading video {i+1}...")
+                    QApplication.processEvents()
+                    video_path = download_video(config['url'], temp_dir)
+                    if not video_path:
+                        logging.warning(f"Skipping video '{config['title']}' due to download failure.")
+                        continue
+                    config['video_path'] = video_path
+
+                    path_for_transform_dialog = self._extract_frame(video_path, temp_dir)
+                    if not path_for_transform_dialog:
+                        logging.warning(f"Skipping video '{config['title']}' due to frame extraction failure.")
+                        continue
+
+                # --- Get Transform Data (common for images and videos) ---
+                self.status_label.setText(f"Status: Awaiting position for item {i+1}...")
+                transform_dialog = TransformDialog(path_for_transform_dialog, self)
+                if transform_dialog.exec() != QDialog.DialogCode.Accepted:
+                    raise InterruptedError("Compilation cancelled by user.")
+                config['transform'] = transform_dialog.get_transform()
+
+                # --- Final processing based on type ---
+                if media_type == 'image':
+                    self.status_label.setText(f"Status: Reading text from image {i+1}...")
+                    QApplication.processEvents()
+                    extracted_text = extract_text_from_image(config['image_path'])
+
+                    self.status_label.setText(f"Status: Awaiting text correction for item {i+1}...")
+                    ocr_dialog = OcrEditDialog(extracted_text, self)
+                    if ocr_dialog.exec() != QDialog.DialogCode.Accepted:
+                        raise InterruptedError("Compilation cancelled by user.")
+                    config['text'] = ocr_dialog.get_text()
+
+                elif media_type == 'video':
+                    config['text'] = '' # Videos have no TTS, so text is blank
+
                 meme_configs.append(config)
 
-            # --- Post-interactive stage (Voice selection and background processing) ---
+            # --- Post-interactive stage ---
+            if not meme_configs:
+                raise ValueError("No valid media items were processed.")
+
             self.settings = settings
             self.meme_configs_for_compilation = meme_configs
             self.status_label.setText("Status: Fetching available voices...")
@@ -551,6 +583,10 @@ class CreatorTab(QWidget):
             self.fetch_voices_worker.error.connect(self._handle_error)
             self.fetch_voices_worker.start()
 
+        except InterruptedError as e:
+            self.status_label.setText(f"Status: {e}")
+            shutil.rmtree(temp_dir)
+            self._set_ui_enabled(True)
         except Exception as e:
             self._handle_error(f"Failed during pre-compilation setup: {e}")
             if 'temp_dir' in locals() and os.path.exists(temp_dir):
