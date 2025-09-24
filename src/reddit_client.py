@@ -96,7 +96,8 @@ def fetch_reddit_memes(
                     media_data = {
                         'type': 'image',
                         'id': post.id, 'title': post.title, 'url': post.url,
-                        'score': post.score, 'fullname': post.fullname
+                        'score': post.score, 'fullname': post.fullname,
+                        'thumbnail_url': post.thumbnail
                     }
                 elif post.is_video:
                     duration = post.media['reddit_video']['duration']
@@ -105,7 +106,8 @@ def fetch_reddit_memes(
                             'type': 'video',
                             'id': post.id, 'title': post.title, 'url': 'https://www.reddit.com' + post.permalink,
                             'score': post.score, 'fullname': post.fullname,
-                            'duration': duration
+                            'duration': duration,
+                            'thumbnail_url': post.thumbnail
                         }
 
                 if media_data:

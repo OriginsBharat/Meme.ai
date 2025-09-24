@@ -110,19 +110,25 @@ def compile_video(
                     logging.warning(f"Skipping video meme '{config['title']}' due to missing file.")
                     continue
 
+                # Create the clip and crop it to the correct aspect ratio
                 video_clip = crop_to_portrait(VideoFileClip(video_path))
                 clip_duration = video_clip.duration
 
-                # Apply scale transform by resizing each frame manually to avoid moviepy's buggy internal resize
+                # Get the user's transform data
                 scale = transform.get("scale", 1.0)
-                new_size = (int(video_clip.w * scale), int(video_clip.h * scale))
+                position = transform.get("pos", "center")
 
-                # Use a lambda with fl_image to apply a high-quality resize to each frame
-                video_clip = video_clip.fl_image(lambda frame: np.array(Image.fromarray(frame).resize(new_size, Image.Resampling.LANCZOS)))
+                # Calculate the target size based on the user's scale
+                target_size = (int(video_clip.w * scale), int(video_clip.h * scale))
 
-                video_clip = video_clip.set_start(current_time).set_position(transform.get("pos", "center"))
+                # Apply the resize using the robust fl_image method
+                video_clip = video_clip.fl_image(lambda frame: np.array(Image.fromarray(frame).resize(target_size, Image.Resampling.LANCZOS)))
+
+                # Set the duration, start time, and final position
+                video_clip = video_clip.set_duration(clip_duration).set_start(current_time).set_position(position)
 
                 visual_clips.append(video_clip)
+                # Ensure the audio clip is also set to the correct start time
                 audio_clips.append(video_clip.audio.set_start(current_time))
                 all_clips_to_close.extend([video_clip, video_clip.audio])
 

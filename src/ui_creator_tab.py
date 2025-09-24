@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QScrollArea,
     QLabel, QGridLayout, QFrame, QCheckBox, QMessageBox, QInputDialog, QFileDialog, QStyle
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QIcon
 
 # Import backend services
@@ -68,15 +68,31 @@ class MemeWidget(QWidget):
         self.image_path = None
 
         layout = QVBoxLayout(self)
-        self.image_label = QLabel("Downloading...")
+
+        # Use a QFrame as a container to allow easy overlaying
+        media_container = QFrame(self)
+        media_container.setFixedSize(200, 200)
+        media_container.setStyleSheet("QFrame { border: 1px solid grey; }")
+
+        # Label for the thumbnail image
+        self.image_label = QLabel(media_container)
+        self.image_label.setGeometry(0, 0, 200, 200)
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setFixedSize(200, 200)
-        self.image_label.setStyleSheet("border: 1px solid grey;")
+
+        # Add a play icon overlay ONLY if it's a video
+        if self.meme_data.get('type') == 'video':
+            self.play_icon_label = QLabel(media_container)
+            self.play_icon_label.setGeometry(0, 0, 200, 200) # Cover the whole container
+            play_icon_pixmap = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay).pixmap(QSize(50, 50))
+            self.play_icon_label.setPixmap(play_icon_pixmap)
+            self.play_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Make the icon label transparent to mouse events so clicks pass through to the parent
+            self.play_icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self.checkbox = QCheckBox(meme_data['title'])
         self.checkbox.setToolTip(meme_data['title'])
 
-        layout.addWidget(self.image_label)
+        layout.addWidget(media_container)
         layout.addWidget(self.checkbox)
 
     def set_image(self, pixmap):
@@ -89,13 +105,15 @@ class MemeWidget(QWidget):
     def on_thumbnail_error(self):
         """Updates the label to show a loading error."""
         self.image_label.setText("Failed to\nload image")
-        self.image_label.setStyleSheet("border: 1px solid red; color: red;")
+        self.image_label.setStyleSheet("color: red;")
 
     def mousePressEvent(self, event):
         """Handle clicks on the widget to show a preview."""
         # Trigger preview only if the click is not on the checkbox
         if not self.checkbox.geometry().contains(event.pos()):
-            preview_dialog = PreviewDialog(self.meme_data['url'], self)
+            # Here, we could launch a different preview for video vs image in the future.
+            # For now, it will just show the thumbnail for both.
+            preview_dialog = PreviewDialog(self.meme_data['thumbnail_url'], self)
             preview_dialog.exec()
 
 # --- Worker Threads ---
@@ -462,7 +480,12 @@ class CreatorTab(QWidget):
             widget = MemeWidget(meme_data)
             self.meme_grid_layout.addWidget(widget, row, col)
 
-            downloader = ImageDownloader(meme_data['url'])
+            thumbnail_url = meme_data.get('thumbnail_url')
+            # Use a placeholder if no thumbnail is available or if it's a reddit placeholder string
+            if not thumbnail_url or thumbnail_url in ['self', 'default', 'nsfw']:
+                thumbnail_url = "https://www.redditstatic.com/icon.png" # A generic Reddit icon
+
+            downloader = ImageDownloader(thumbnail_url)
             downloader.finished.connect(widget.set_image)
             downloader.error.connect(widget.on_thumbnail_error)
             self.image_downloaders.append(downloader)
