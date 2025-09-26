@@ -5,7 +5,7 @@ This is a desktop application designed to automatically fetch memes from Reddit,
 ## Features
 
 - **Keyword-based Meme Fetching:** Searches Reddit for image-based memes based on your keywords.
-- **Smart Filtering:** Filters memes by upvote count (500+) and for posts with at least two comments containing the word "relatable".
+- **Smart Filtering:** Filters memes by a minimum upvote count (500+) and excludes memes that have already been used in a previous compilation.
 - **OCR and TTS:** Automatically extracts text from image memes using Tesseract OCR and generates voiceovers using the ElevenLabs API.
 - **Automated Video Compilation:** Combines an intro, the selected memes, a background video, background music, and an outro into a single video file.
 - **YouTube Integration:** Option to upload the final video directly to your YouTube channel.

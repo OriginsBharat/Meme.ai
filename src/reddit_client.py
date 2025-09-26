@@ -41,13 +41,14 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
     used_ids = get_used_meme_ids()
     logging.info(f"Excluding {len(used_ids)} already used memes.")
 
-    logging.info(f"Searching for up to {total_limit} memes with keyword '{keyword}'...")
+    logging.info(f"Searching for up to {total_limit} memes with keyword '{keyword}' sorted by 'new'...")
     for subreddit_name in SUBREDDITS_TO_SEARCH:
         if len(found_memes) >= total_limit:
             break
         try:
             subreddit = reddit.subreddit(subreddit_name)
-            for post in subreddit.search(keyword, sort="relevance", limit=search_limit_per_subreddit):
+            # Sort by "new" to get fresh content on each search, making it act like a refresh.
+            for post in subreddit.search(keyword, sort="new", limit=search_limit_per_subreddit):
                 if post.id in processed_post_ids or post.id in used_ids:
                     continue
                 processed_post_ids.add(post.id)
