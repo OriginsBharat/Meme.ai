@@ -4,6 +4,7 @@ import requests
 import os
 import tempfile
 import uuid
+import shutil
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QScrollArea,
     QLabel, QGridLayout, QFrame, QCheckBox, QMessageBox, QInputDialog, QFileDialog, QStyle
@@ -18,10 +19,10 @@ from tts_service import TTSManager
 from video_compiler import compile_video
 from ui_settings_tab import SETTINGS_FILE
 from ui_voice_dialog import VoiceSelectionDialog
+from ui_transform_dialog import TransformDialog
+from ui_ocr_edit_dialog import OcrEditDialog
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-from PyQt6.QtWidgets import QDialog
 
 # --- Preview Dialog ---
 class PreviewDialog(QDialog):
@@ -58,7 +59,6 @@ class PreviewDialog(QDialog):
     def on_download_error(self):
         self.image_label.setText("Failed to load high-resolution image.")
 
-
 # --- Meme Widget ---
 class MemeWidget(QWidget):
     """A widget to display a single meme with a checkbox."""
@@ -68,31 +68,15 @@ class MemeWidget(QWidget):
         self.image_path = None
 
         layout = QVBoxLayout(self)
-
-        # Use a QFrame as a container to allow easy overlaying
-        media_container = QFrame(self)
-        media_container.setFixedSize(200, 200)
-        media_container.setStyleSheet("QFrame { border: 1px solid grey; }")
-
-        # Label for the thumbnail image
-        self.image_label = QLabel(media_container)
-        self.image_label.setGeometry(0, 0, 200, 200)
+        self.image_label = QLabel("Downloading...")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Add a play icon overlay ONLY if it's a video
-        if self.meme_data.get('type') == 'video':
-            self.play_icon_label = QLabel(media_container)
-            self.play_icon_label.setGeometry(0, 0, 200, 200) # Cover the whole container
-            play_icon_pixmap = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay).pixmap(QSize(50, 50))
-            self.play_icon_label.setPixmap(play_icon_pixmap)
-            self.play_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            # Make the icon label transparent to mouse events so clicks pass through to the parent
-            self.play_icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.image_label.setFixedSize(200, 200)
+        self.image_label.setStyleSheet("border: 1px solid grey;")
 
         self.checkbox = QCheckBox(meme_data['title'])
         self.checkbox.setToolTip(meme_data['title'])
 
-        layout.addWidget(media_container)
+        layout.addWidget(self.image_label)
         layout.addWidget(self.checkbox)
 
     def set_image(self, pixmap):
@@ -105,40 +89,33 @@ class MemeWidget(QWidget):
     def on_thumbnail_error(self):
         """Updates the label to show a loading error."""
         self.image_label.setText("Failed to\nload image")
-        self.image_label.setStyleSheet("color: red;")
+        self.image_label.setStyleSheet("border: 1px solid red; color: red;")
 
     def mousePressEvent(self, event):
         """Handle clicks on the widget to show a preview."""
-        # Trigger preview only if the click is not on the checkbox
         if not self.checkbox.geometry().contains(event.pos()):
-            # Here, we could launch a different preview for video vs image in the future.
-            # For now, it will just show the thumbnail for both.
-            preview_dialog = PreviewDialog(self.meme_data['thumbnail_url'], self)
+            preview_dialog = PreviewDialog(self.meme_data['url'], self)
             preview_dialog.exec()
 
 # --- Worker Threads ---
 class RedditSearchWorker(QThread):
-    # The finished signal now emits the list of memes and the 'fullname' of the last post
-    finished = pyqtSignal(list, object) # Using object for str | None type
+    finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, settings, keyword, after=None):
+    def __init__(self, settings, keyword):
         super().__init__()
         self.settings = settings
         self.keyword = keyword
-        self.after = after
 
     def run(self):
         try:
-            # The fetch function now returns the last post's ID for pagination
-            memes, last_post_fullname = fetch_reddit_memes(
+            memes = fetch_reddit_memes(
                 client_id=self.settings["reddit_client_id"],
                 client_secret=self.settings["reddit_client_secret"],
                 user_agent=self.settings["reddit_user_agent"],
-                keyword=self.keyword,
-                after=self.after
+                keyword=self.keyword
             )
-            self.finished.emit(memes, last_post_fullname)
+            self.finished.emit(memes)
         except Exception as e:
             logging.error(f"Error in RedditSearchWorker: {e}", exc_info=True)
             self.error.emit(f"Failed to fetch from Reddit: {e}")
@@ -162,7 +139,6 @@ class ImageDownloader(QThread):
             logging.error(f"Failed to download image {self.url}: {e}")
             self.error.emit()
 
-import shutil
 from youtube_uploader import upload_video
 from used_memes_manager import add_used_meme_ids
 from ui_upload_dialog import UploadDialog
@@ -177,71 +153,75 @@ class VideoCompileWorker(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, meme_configs, settings, voice_id):
+    def __init__(self, meme_configs, settings, voice_id, mode='image'):
         super().__init__()
         self.meme_configs = meme_configs
         self.settings = settings
         self.voice_id = voice_id
+        self.mode = mode
 
     def run(self):
         if not self.meme_configs:
             self.error.emit("No memes to compile.")
             return
-        # Get the temporary directory from one of the image paths.
-        temp_dir = os.path.dirname(self.meme_configs[0]['image_path'])
+
+        # This logic is brittle, but we're keeping it for now. It requires that the
+        # _start_compilation method ensures at least one item has a downloadable path.
+        first_item = self.meme_configs[0]
+        if 'image_path' in first_item:
+            temp_dir = os.path.dirname(first_item['image_path'])
+        elif 'video_path' in first_item:
+            temp_dir = os.path.dirname(first_item['video_path'])
+        else:
+            self.error.emit("Could not determine temporary directory from first meme config.")
+            return
 
         try:
-            # TTS service is still needed, but OCR is now done before this worker starts.
-            tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
+            output_video_path = os.path.join(temp_dir, f"final_video_{uuid.uuid4().hex}.mp4")
+            processed_data = self.meme_configs
 
-            processed_meme_data = []
-            total_memes = len(self.meme_configs)
+            if self.mode == 'image':
+                self.progress.emit("Generating TTS audio for image memes...")
+                tts_manager = TTSManager(api_key=self.settings.get("elevenlabs_api_key"))
+                processed_data = []
+                for config in self.meme_configs:
+                    if config.get('text'):
+                        audio_filename = os.path.join(temp_dir, f"tts_{uuid.uuid4().hex}.mp3")
+                        tts_manager.generate_tts_audio(
+                            text_to_speak=config['text'],
+                            output_filepath=audio_filename,
+                            voice=self.voice_id
+                        )
+                        config['tts_audio_path'] = audio_filename
+                    processed_data.append(config)
 
-            for i, config in enumerate(self.meme_configs):
-                # Get the user-corrected text from the config dictionary.
-                text = config.get('text', '')
-
-                if not text:
-                    logging.warning(f"No text for meme '{config['title']}'. Skipping TTS for this meme.")
-                    config['tts_audio_path'] = None
-                    processed_meme_data.append(config)
-                    continue
-
-                self.progress.emit(f"Meme {i+1}/{total_memes}: Generating TTS audio...")
-                audio_filename = os.path.join(temp_dir, f"tts_{i}.mp3")
-                tts_manager.generate_tts_audio(
-                    text_to_speak=text,
-                    output_filepath=audio_filename,
-                    voice=self.voice_id
+                self.progress.emit("Compiling overlay-style video...")
+                result_path = compile_video(
+                    meme_data=processed_data,
+                    intro_path=self.settings["intro_path"],
+                    outro_path=self.settings["outro_path"],
+                    bg_video_path=self.settings["bg_video_path"],
+                    bg_music_path=self.settings["bg_music_path"],
+                    output_path=output_video_path
                 )
 
-                config['tts_audio_path'] = audio_filename
-                processed_meme_data.append(config)
-
-            if not processed_meme_data:
-                self.error.emit("Compilation failed: No memes were processed.")
-                return
-
-            self.progress.emit("Compiling final video...")
-            output_video_path = os.path.join(temp_dir, f"final_video_{uuid.uuid4().hex}.mp4")
-
-            result_path = compile_video(
-                meme_data=processed_meme_data,
-                intro_path=self.settings["intro_path"],
-                outro_path=self.settings["outro_path"],
-                bg_video_path=self.settings["bg_video_path"],
-                bg_music_path=self.settings["bg_music_path"],
-                output_path=output_video_path
-            )
+            elif self.mode == 'video':
+                self.progress.emit("Compiling full-screen video...")
+                video_paths = [config['video_path'] for config in self.meme_configs if 'video_path' in config]
+                result_path = compile_video_fullscreen(
+                    video_paths=video_paths,
+                    intro_path=self.settings["intro_path"],
+                    outro_path=self.settings["outro_path"],
+                    output_path=output_video_path
+                )
 
             if result_path:
-                self.finished.emit(output_video_path, temp_dir, processed_meme_data)
+                self.finished.emit(output_video_path, temp_dir, processed_data)
             else:
                 raise RuntimeError("Video compilation failed. Check logs for details.")
 
         except Exception as e:
             logging.error(f"Error in VideoCompileWorker: {e}", exc_info=True)
-            # Ensure temp directory is cleaned up on error
             if 'temp_dir' in locals() and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
             self.error.emit(str(e))
@@ -328,9 +308,11 @@ class CreatorTab(QWidget):
         # State for paginated Reddit search
         self.last_keyword_searched = ""
         self.last_post_fullname = None
+        self.current_mode = "image"
 
         main_layout = QVBoxLayout(self)
 
+        # --- Search and Mode Selection ---
         search_layout = QHBoxLayout()
         self.keyword_input = QLineEdit()
         self.keyword_input.setPlaceholderText("Enter meme keyword...")
@@ -338,11 +320,22 @@ class CreatorTab(QWidget):
         search_layout.addWidget(self.keyword_input)
         search_layout.addWidget(self.search_button)
 
+        mode_group_box = QGroupBox("Compilation Mode")
+        mode_layout = QHBoxLayout()
+        self.image_mode_radio = QRadioButton("Images")
+        self.video_mode_radio = QRadioButton("Videos")
+        self.image_mode_radio.setChecked(True)
+        self.image_mode_radio.toggled.connect(lambda: self._mode_changed("image"))
+        self.video_mode_radio.toggled.connect(lambda: self._mode_changed("video"))
+        mode_layout.addWidget(self.image_mode_radio)
+        mode_layout.addWidget(self.video_mode_radio)
+        mode_layout.addStretch()
+        mode_group_box.setLayout(mode_layout)
+
         # --- Quota Display ---
         quota_layout = QHBoxLayout()
         self.quota_label = QLabel("ElevenLabs Quota: N/A")
         self.refresh_quota_button = QPushButton()
-        # Using a standard, built-in icon for refresh
         self.refresh_quota_button.setIcon(self.style().standardIcon(getattr(QStyle.StandardPixmap, "SP_BrowserReload")))
         self.refresh_quota_button.setToolTip("Refresh character quota")
         quota_layout.addStretch()
@@ -350,6 +343,19 @@ class CreatorTab(QWidget):
         quota_layout.addWidget(self.refresh_quota_button)
 
         main_layout.addLayout(search_layout)
+
+        mode_group_box = QGroupBox("Compilation Mode")
+        mode_layout = QHBoxLayout()
+        self.image_mode_radio = QRadioButton("Images (Overlay)")
+        self.video_mode_radio = QRadioButton("Videos (Full-Screen)")
+        self.image_mode_radio.setChecked(True)
+        self.image_mode_radio.toggled.connect(lambda: self._mode_changed("image"))
+        self.video_mode_radio.toggled.connect(lambda: self._mode_changed("video"))
+        mode_layout.addWidget(self.image_mode_radio)
+        mode_layout.addWidget(self.video_mode_radio)
+        mode_layout.addStretch()
+        mode_group_box.setLayout(mode_layout)
+        main_layout.addWidget(mode_group_box)
         main_layout.addLayout(quota_layout)
 
         scroll_area = QScrollArea()
@@ -373,8 +379,25 @@ class CreatorTab(QWidget):
         self.compile_button.clicked.connect(self._start_compilation)
         self.refresh_quota_button.clicked.connect(self._update_character_count)
 
-        # Initial load of character count
         self._update_character_count()
+
+    def _mode_changed(self, mode):
+        # This function is called when a radio button is toggled.
+        # We check which button is checked to set the current mode.
+        if self.image_mode_radio.isChecked() and self.current_mode != "image":
+            self.current_mode = "image"
+            logging.info("Switched to Image Mode.")
+            self._clear_grid()
+            self._show_placeholder_message("Switched to Image Mode. Enter a keyword to find memes.")
+            self.last_keyword_searched = "" # Reset search on mode change
+            self.last_post_fullname = None
+        elif self.video_mode_radio.isChecked() and self.current_mode != "video":
+            self.current_mode = "video"
+            logging.info("Switched to Video Mode.")
+            self._clear_grid()
+            self._show_placeholder_message("Switched to Video Mode. Enter a keyword to find memes.")
+            self.last_keyword_searched = "" # Reset search on mode change
+            self.last_post_fullname = None
 
     def _update_character_count(self):
         """Starts the worker to fetch the latest subscription info."""
@@ -436,7 +459,7 @@ class CreatorTab(QWidget):
 
         # The worker will now be passed the 'after' parameter for pagination.
         # This will be None for a new search, or a post ID for a refresh.
-        self.search_worker = RedditSearchWorker(settings, keyword, after=self.last_post_fullname)
+        self.search_worker = RedditSearchWorker(settings, keyword, mode=self.current_mode, after=self.last_post_fullname)
         self.search_worker.finished.connect(self._display_memes)
         self.search_worker.error.connect(self._handle_error)
         self.search_worker.start()
@@ -503,11 +526,63 @@ class CreatorTab(QWidget):
         try:
             with VideoFileClip(video_path) as clip:
                 frame_path = os.path.join(output_dir, f"thumb_{uuid.uuid4().hex}.png")
-                clip.save_frame(frame_path, t=0) # Save frame at t=0 seconds
+                clip.save_frame(frame_path, t=0)
             return frame_path
         except Exception as e:
             logging.error(f"Failed to extract frame from {video_path}: {e}")
             return None
+
+    def _process_image_for_compilation(self, config, temp_dir):
+        """Downloads, transforms, and runs OCR for a single image meme."""
+        self.status_label.setText(f"Downloading image: {config['title'][:30]}...")
+        QApplication.processEvents()
+
+        response = requests.get(config['url'])
+        response.raise_for_status()
+        ext = os.path.splitext(config['url'])[1] or '.png'
+        image_path = os.path.join(temp_dir, f"img_{uuid.uuid4().hex}{ext}")
+        with open(image_path, 'wb') as f: f.write(response.content)
+        config['image_path'] = image_path
+
+        transform_dialog = TransformDialog(image_path, self)
+        if transform_dialog.exec() != QDialog.DialogCode.Accepted:
+            raise InterruptedError("Compilation cancelled.")
+        config['transform'] = transform_dialog.get_transform()
+
+        self.status_label.setText(f"Reading text from: {config['title'][:30]}...")
+        QApplication.processEvents()
+        extracted_text = extract_text_from_image(image_path)
+
+        ocr_dialog = OcrEditDialog(extracted_text, self)
+        if ocr_dialog.exec() != QDialog.DialogCode.Accepted:
+            raise InterruptedError("Compilation cancelled.")
+        config['text'] = ocr_dialog.get_text()
+
+        return config
+
+    def _process_video_for_compilation(self, config, temp_dir):
+        """Downloads, gets thumbnail, and transforms a single video meme."""
+        self.status_label.setText(f"Downloading video: {config['title'][:30]}...")
+        QApplication.processEvents()
+
+        video_path = download_video(config['url'], temp_dir)
+        if not video_path:
+            logging.warning(f"Skipping video '{config['title']}' due to download failure.")
+            return None
+        config['video_path'] = video_path
+
+        thumbnail_path = self._extract_frame(video_path, temp_dir)
+        if not thumbnail_path:
+            logging.warning(f"Skipping video '{config['title']}' due to frame extraction failure.")
+            return None
+
+        transform_dialog = TransformDialog(thumbnail_path, self)
+        if transform_dialog.exec() != QDialog.DialogCode.Accepted:
+            raise InterruptedError("Compilation cancelled.")
+        config['transform'] = transform_dialog.get_transform()
+        config['text'] = '' # Videos have no TTS
+
+        return config
 
     def _start_compilation(self):
         settings = self._load_settings()
@@ -516,103 +591,53 @@ class CreatorTab(QWidget):
             QMessageBox.warning(self, "Settings Missing", "Please ensure all API keys and file paths are set in Settings.")
             return
 
-        selected_widgets = [self.meme_grid_layout.itemAt(i).widget() for i in range(self.meme_grid_layout.count()) if isinstance(self.meme_grid_layout.itemAt(i).widget(), MemeWidget) and self.meme_grid_layout.itemAt(i).widget().checkbox.isChecked()]
-
+        selected_widgets = [w for w in self.findChildren(MemeWidget) if w.checkbox.isChecked()]
         if not selected_widgets:
             QMessageBox.warning(self, "No Memes Selected", "Please select at least one meme.")
             return
 
-        # Configure Tesseract once before the loop
         configure_tessdata(settings.get("tessdata_path"))
         if not configure_tesseract(settings.get("tesseract_path")):
             self._handle_error("Tesseract executable not configured. Check path in Settings.")
             return
 
-        self.search_button.setEnabled(False)
-        self.compile_button.setEnabled(False)
-
+        self._set_ui_enabled(False)
         temp_dir = tempfile.mkdtemp(prefix="meme-compiler-")
+
         try:
             meme_configs = []
             for i, widget in enumerate(selected_widgets):
+                self.status_label.setText(f"Processing item {i+1}/{len(selected_widgets)}...")
                 config = widget.meme_data.copy()
-                media_type = config.get('type', 'image')
 
-                self.status_label.setText(f"Status: Processing {media_type} {i+1}/{len(selected_widgets)}...")
-                QApplication.processEvents()
+                if config.get('type') == 'image':
+                    processed_config = self._process_image_for_compilation(config, temp_dir)
+                elif config.get('type') == 'video':
+                    processed_config = self._process_video_for_compilation(config, temp_dir)
+                else:
+                    processed_config = None
 
-                # This path will point to a static image for the transform dialog
-                path_for_transform_dialog = None
+                if processed_config:
+                    meme_configs.append(processed_config)
 
-                if media_type == 'image':
-                    self.status_label.setText(f"Status: Downloading image {i+1}...")
-                    QApplication.processEvents()
-                    response = requests.get(config['url'])
-                    response.raise_for_status()
-                    ext = os.path.splitext(config['url'])[1] or '.png'
-                    image_path = os.path.join(temp_dir, f"img_{i}{ext}")
-                    with open(image_path, 'wb') as f:
-                        f.write(response.content)
-                    config['image_path'] = image_path
-                    path_for_transform_dialog = image_path
-
-                elif media_type == 'video':
-                    self.status_label.setText(f"Status: Downloading video {i+1}...")
-                    QApplication.processEvents()
-                    video_path = download_video(config['url'], temp_dir)
-                    if not video_path:
-                        logging.warning(f"Skipping video '{config['title']}' due to download failure.")
-                        continue
-                    config['video_path'] = video_path
-
-                    path_for_transform_dialog = self._extract_frame(video_path, temp_dir)
-                    if not path_for_transform_dialog:
-                        logging.warning(f"Skipping video '{config['title']}' due to frame extraction failure.")
-                        continue
-
-                # --- Get Transform Data (common for images and videos) ---
-                self.status_label.setText(f"Status: Awaiting position for item {i+1}...")
-                transform_dialog = TransformDialog(path_for_transform_dialog, self)
-                if transform_dialog.exec() != QDialog.DialogCode.Accepted:
-                    raise InterruptedError("Compilation cancelled by user.")
-                config['transform'] = transform_dialog.get_transform()
-
-                # --- Final processing based on type ---
-                if media_type == 'image':
-                    self.status_label.setText(f"Status: Reading text from image {i+1}...")
-                    QApplication.processEvents()
-                    extracted_text = extract_text_from_image(config['image_path'])
-
-                    self.status_label.setText(f"Status: Awaiting text correction for item {i+1}...")
-                    ocr_dialog = OcrEditDialog(extracted_text, self)
-                    if ocr_dialog.exec() != QDialog.DialogCode.Accepted:
-                        raise InterruptedError("Compilation cancelled by user.")
-                    config['text'] = ocr_dialog.get_text()
-
-                elif media_type == 'video':
-                    config['text'] = '' # Videos have no TTS, so text is blank
-
-                meme_configs.append(config)
-
-            # --- Post-interactive stage ---
             if not meme_configs:
                 raise ValueError("No valid media items were processed.")
 
             self.settings = settings
             self.meme_configs_for_compilation = meme_configs
-            self.status_label.setText("Status: Fetching available voices...")
-            self.fetch_voices_worker = FetchVoicesWorker(api_key=self.settings.get("elevenlabs_api_key"))
+            self.status_label.setText("Fetching available voices...")
+            self.fetch_voices_worker = FetchVoicesWorker(api_key=settings.get("elevenlabs_api_key"))
             self.fetch_voices_worker.finished.connect(self._on_voices_fetched)
             self.fetch_voices_worker.error.connect(self._handle_error)
             self.fetch_voices_worker.start()
 
         except InterruptedError as e:
-            self.status_label.setText(f"Status: {e}")
+            self.status_label.setText(str(e))
             shutil.rmtree(temp_dir)
             self._set_ui_enabled(True)
         except Exception as e:
             self._handle_error(f"Failed during pre-compilation setup: {e}")
-            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
     def _on_voices_fetched(self, voices):
@@ -630,7 +655,8 @@ class CreatorTab(QWidget):
                 self.compile_worker = VideoCompileWorker(
                     self.meme_configs_for_compilation,
                     self.settings,
-                    selected_voice_id
+                    selected_voice_id,
+                    self.current_mode
                 )
                 self.compile_worker.progress.connect(self._update_status)
                 self.compile_worker.finished.connect(self._on_compilation_finished)
@@ -670,9 +696,9 @@ class CreatorTab(QWidget):
             # If user dismisses or saves, clean up the temp dir
             try:
                 shutil.rmtree(temp_dir)
-                logging.info(f"Successfully cleaned up temporary directory: {temp_dir}")
+                logging.info(f"Successfully cleaned up temporary directory: {self.temp_dir}")
             except Exception as e:
-                logging.error(f"Failed to clean up temporary directory {temp_dir}: {e}")
+                logging.error(f"Failed to clean up temporary directory {self.temp_dir}: {e}")
 
     def _start_youtube_upload(self, video_path, meme_data_list, temp_dir):
         settings = self._load_settings()

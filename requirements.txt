@@ -9,3 +9,5 @@ requests
 pyinstaller
 Pillow
 yt-dlp
+tensorflow
+fer
