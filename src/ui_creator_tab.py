@@ -14,6 +14,7 @@ from PyQt6.QtGui import QPixmap
 
 # --- Re-organized and cleaned imports ---
 from reddit_client import fetch_reddit_memes
+from x_client import fetch_x_memes
 from ocr_service import extract_text_from_image, configure_tesseract, configure_tessdata
 from tts_service import TTSManager
 from video_compiler import compile_video
@@ -130,27 +131,45 @@ class PreprocessingWorker(QThread):
             self.error.emit(f"Failed during preprocessing: {e}")
 
 # --- Worker Threads ---
-class RedditSearchWorker(QThread):
+class SearchWorker(QThread):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, settings, keyword):
+    def __init__(self, settings, keyword, source):
         super().__init__()
         self.settings = settings
         self.keyword = keyword
+        self.source = source
 
     def run(self):
         try:
-            memes = fetch_reddit_memes(
-                client_id=self.settings["reddit_client_id"],
-                client_secret=self.settings["reddit_client_secret"],
-                user_agent=self.settings["reddit_user_agent"],
-                keyword=self.keyword
-            )
-            self.finished.emit(memes)
+            all_memes = []
+            if self.source in ["reddit", "both"]:
+                logging.info("Fetching memes from Reddit...")
+                reddit_memes = fetch_reddit_memes(
+                    client_id=self.settings["reddit_client_id"],
+                    client_secret=self.settings["reddit_client_secret"],
+                    user_agent=self.settings["reddit_user_agent"],
+                    keyword=self.keyword
+                )
+                all_memes.extend(reddit_memes)
+
+            if self.source in ["x", "both"]:
+                logging.info("Fetching memes from X/Twitter...")
+                x_memes = fetch_x_memes(
+                    username=self.settings["x_username"],
+                    password=self.settings["x_password"],
+                    keyword=self.keyword
+                )
+                all_memes.extend(x_memes)
+
+            # Shuffle the combined list to mix sources
+            random.shuffle(all_memes)
+
+            self.finished.emit(all_memes)
         except Exception as e:
-            logging.error(f"Error in RedditSearchWorker: {e}", exc_info=True)
-            self.error.emit(f"Failed to fetch from Reddit: {e}")
+            logging.error(f"Error in SearchWorker: {e}", exc_info=True)
+            self.error.emit(f"Failed to fetch memes: {e}")
 
 class ImageDownloader(QThread):
     finished = pyqtSignal(QPixmap)
@@ -303,11 +322,15 @@ class FetchVoicesWorker(QThread):
 
 
 # --- Creator Tab ---
+import random
+from PyQt6.QtWidgets import QGroupBox, QRadioButton
+
 class CreatorTab(QWidget):
     def __init__(self):
         super().__init__()
         self.image_downloaders = []
         self.last_compilation_data = []
+        self.current_source = "reddit" # Default source
 
         main_layout = QVBoxLayout(self)
 
@@ -318,6 +341,24 @@ class CreatorTab(QWidget):
         self.search_button = QPushButton("Search")
         search_layout.addWidget(self.keyword_input)
         search_layout.addWidget(self.search_button)
+
+        # --- Source Selection ---
+        source_group_box = QGroupBox("Meme Source")
+        source_layout = QHBoxLayout()
+        self.reddit_radio = QRadioButton("Reddit")
+        self.x_radio = QRadioButton("X")
+        self.both_radio = QRadioButton("Both")
+        self.reddit_radio.setChecked(True)
+
+        self.reddit_radio.toggled.connect(lambda: self._source_changed("reddit"))
+        self.x_radio.toggled.connect(lambda: self._source_changed("x"))
+        self.both_radio.toggled.connect(lambda: self._source_changed("both"))
+
+        source_layout.addWidget(self.reddit_radio)
+        source_layout.addWidget(self.x_radio)
+        source_layout.addWidget(self.both_radio)
+        source_layout.addStretch()
+        source_group_box.setLayout(source_layout)
 
         # --- Quota Display ---
         quota_layout = QHBoxLayout()
@@ -330,6 +371,7 @@ class CreatorTab(QWidget):
         quota_layout.addWidget(self.refresh_quota_button)
 
         main_layout.addLayout(search_layout)
+        main_layout.addWidget(source_group_box)
         main_layout.addLayout(quota_layout)
 
         scroll_area = QScrollArea()
@@ -380,11 +422,28 @@ class CreatorTab(QWidget):
             with open(SETTINGS_FILE, 'r') as f: return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError): return None
 
+    def _source_changed(self, source):
+        if self.sender().isChecked():
+            self.current_source = source
+            logging.info(f"Meme source changed to: {self.current_source}")
+            self._clear_grid()
+            self._show_placeholder_message(f"Source set to {source.capitalize()}. Enter a keyword to search.")
+
     def _start_search(self):
         settings = self._load_settings()
-        if not settings or not all(settings.get(k) for k in ["reddit_client_id", "reddit_client_secret", "reddit_user_agent"]):
-            QMessageBox.warning(self, "Settings Missing", "Please configure Reddit API credentials in Settings.")
+        if not settings:
+            QMessageBox.warning(self, "Settings Missing", "Please configure your settings first.")
             return
+
+        # Validate credentials based on selected source
+        if self.current_source in ["reddit", "both"]:
+            if not all(settings.get(k) for k in ["reddit_client_id", "reddit_client_secret", "reddit_user_agent"]):
+                QMessageBox.warning(self, "Reddit Settings Missing", "Please configure Reddit API credentials in Settings to use this source.")
+                return
+        if self.current_source in ["x", "both"]:
+            if not all(settings.get(k) for k in ["x_username", "x_password"]):
+                QMessageBox.warning(self, "X/Twitter Settings Missing", "Please configure your X/Twitter username and password in Settings to use this source.")
+                return
 
         keyword = self.keyword_input.text().strip()
         if not keyword:
@@ -392,11 +451,11 @@ class CreatorTab(QWidget):
             return
 
         self._set_ui_enabled(False)
-        self.status_label.setText(f"Status: Searching for '{keyword}'...")
+        self.status_label.setText(f"Status: Searching {self.current_source.capitalize()} for '{keyword}'...")
         self._clear_grid()
         self._show_placeholder_message("Searching for new memes...")
 
-        self.search_worker = RedditSearchWorker(settings, keyword)
+        self.search_worker = SearchWorker(settings, keyword, self.current_source)
         self.search_worker.finished.connect(self._display_memes)
         self.search_worker.error.connect(self._handle_error)
         self.search_worker.start()

@@ -31,6 +31,9 @@ class SettingsTab(QWidget):
         self.reddit_client_secret_edit = QLineEdit()
         self.reddit_client_secret_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.reddit_user_agent_edit = QLineEdit()
+        self.x_username_edit = QLineEdit()
+        self.x_password_edit = QLineEdit()
+        self.x_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.elevenlabs_api_key_edit = QLineEdit()
         self.elevenlabs_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.tesseract_path_edit = QLineEdit()
@@ -65,6 +68,8 @@ class SettingsTab(QWidget):
         form_layout.addRow("Reddit Client ID:", self.reddit_client_id_edit)
         form_layout.addRow("Reddit Client Secret:", self.reddit_client_secret_edit)
         form_layout.addRow("Reddit User Agent:", self.reddit_user_agent_edit)
+        form_layout.addRow("X/Twitter Username:", self.x_username_edit)
+        form_layout.addRow("X/Twitter Password:", self.x_password_edit)
         form_layout.addRow("ElevenLabs API Key:", self.elevenlabs_api_key_edit)
         form_layout.addRow("Google Client Secrets File:", self._create_browse_row(self.google_secrets_path_edit, google_browse_button))
         form_layout.addRow("Tesseract Executable:", self._create_browse_row(self.tesseract_path_edit, tesseract_browse_button))
@@ -131,6 +136,8 @@ class SettingsTab(QWidget):
             "reddit_client_id": self.reddit_client_id_edit.text(),
             "reddit_client_secret": self.reddit_client_secret_edit.text(),
             "reddit_user_agent": self.reddit_user_agent_edit.text(),
+            "x_username": self.x_username_edit.text(),
+            "x_password": self.x_password_edit.text(),
             "elevenlabs_api_key": self.elevenlabs_api_key_edit.text(),
             "google_secrets_path": self.google_secrets_path_edit.text(),
             "tesseract_path": self.tesseract_path_edit.text(),
@@ -156,6 +163,8 @@ class SettingsTab(QWidget):
             self.reddit_client_id_edit.setText(settings.get("reddit_client_id", ""))
             self.reddit_client_secret_edit.setText(settings.get("reddit_client_secret", ""))
             self.reddit_user_agent_edit.setText(settings.get("reddit_user_agent", ""))
+            self.x_username_edit.setText(settings.get("x_username", ""))
+            self.x_password_edit.setText(settings.get("x_password", ""))
             self.elevenlabs_api_key_edit.setText(settings.get("elevenlabs_api_key", ""))
             self.google_secrets_path_edit.setText(settings.get("google_secrets_path", ""))
             self.tesseract_path_edit.setText(settings.get("tesseract_path", ""))
