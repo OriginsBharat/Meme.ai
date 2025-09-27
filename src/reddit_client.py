@@ -67,7 +67,8 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
                     'id': post.id,
                     'title': post.title,
                     'url': post.url,
-                    'score': post.score
+                    'score': post.score,
+                    'thumbnail_url': post.thumbnail
                 })
         except Exception as e:
             logging.error(f"Could not search subreddit r/{subreddit_name}: {e}")

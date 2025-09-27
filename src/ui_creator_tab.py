@@ -479,11 +479,17 @@ class CreatorTab(QWidget):
             col = i % num_cols
             self.meme_grid_layout.addWidget(widget, row, col)
 
-            thumbnail_url = meme_data.get('thumbnail_url')
-            if not thumbnail_url or thumbnail_url in ['self', 'default', 'nsfw']:
-                thumbnail_url = "https://www.redditstatic.com/icon.png"
+            # Prioritize thumbnail_url, but fall back to the main image url if it's invalid or missing.
+            # This makes the UI more robust for different data sources (Reddit vs. X).
+            thumbnail_url_to_use = meme_data.get('thumbnail_url')
+            if not thumbnail_url_to_use or thumbnail_url_to_use in ['self', 'default', 'nsfw', 'image']:
+                thumbnail_url_to_use = meme_data.get('url') # Fallback to the main image URL
 
-            downloader = ImageDownloader(thumbnail_url)
+            # If both URLs are somehow invalid, use a generic placeholder.
+            if not thumbnail_url_to_use:
+                thumbnail_url_to_use = "https://www.redditstatic.com/icon.png" # Generic placeholder
+
+            downloader = ImageDownloader(thumbnail_url_to_use)
             downloader.finished.connect(widget.set_image)
             downloader.error.connect(widget.on_thumbnail_error)
             self.image_downloaders.append(downloader)
