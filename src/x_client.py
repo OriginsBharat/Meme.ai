@@ -8,9 +8,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # A constant to store the cookie file path
 COOKIE_FILE_PATH = 'x_cookies.json'
 
-async def search_tweets_async(username, password, keyword, limit):
+async def search_tweets_async(username, password, keyword, limit, after=None):
     """
     Asynchronous function to perform the tweet search.
+    'after' is included for signature consistency but is not used by twikit's search.
     """
     client = Client(language='en-US')
 
@@ -24,47 +25,51 @@ async def search_tweets_async(username, password, keyword, limit):
         logging.info("X/Twitter login successful.")
     except Exception as e:
         logging.error(f"Failed to log in to X/Twitter: {e}", exc_info=True)
-        # If login fails, we cannot proceed.
-        return []
+        return [], None
 
     found_memes = []
+    # Note: twikit search doesn't have a native 'after' cursor.
+    # It fetches a batch. Infinite scroll for X will be more like a "load more" button
+    # that re-runs the search, relying on 'newest' sort order to get different results.
+    # For now, we fetch one batch and return None for the cursor.
+
     try:
-        logging.info(f"Searching X/Twitter for tweets with keyword: '{keyword}'")
-        search_results = await client.search_tweet(keyword, 'media')
+        logging.info(f"Searching X/Twitter for '{keyword}', sorted by 'Latest'")
+        # Search by 'Latest' to get the most recent tweets first.
+        search_results = await client.search_tweet(keyword, 'Latest')
 
         for tweet in search_results:
             if len(found_memes) >= limit:
                 break
 
-            # We are interested in tweets that have images.
             if tweet.media and any(media.type == 'photo' for media in tweet.media):
                 for media in tweet.media:
                     if media.type == 'photo':
-                        # Use the first photo found in the tweet.
                         found_memes.append({
                             'id': tweet.id,
-                            'title': tweet.text, # Use tweet text as title
-                            'url': media.media_url_https, # The direct URL to the image
-                            'score': tweet.favorite_count # Use favorite count as a proxy for score
+                            'title': tweet.text,
+                            'url': media.media_url_https,
+                            'score': tweet.favorite_count,
+                            'thumbnail_url': media.media_url_https, # X doesn't have separate thumbnails
+                            'source': 'x'
                         })
-                        # Stop after finding the first image in a tweet to avoid duplicates.
-                        break
+                        break # Use the first photo found in the tweet
     except Exception as e:
         logging.error(f"An error occurred during tweet search: {e}", exc_info=True)
 
-    return found_memes
+    # Return None for the cursor, as twikit does not support it for search.
+    return found_memes, None
 
-def fetch_x_memes(username: str, password: str, keyword: str, total_limit: int = 25):
+def fetch_x_memes(username: str, password: str, keyword: str, limit: int = 25, after: str | None = None):
     """
     Synchronous wrapper to fetch image-based memes from X/Twitter.
     """
     if not all([username, password]):
         logging.error("X/Twitter credentials are missing.")
-        return []
+        return [], None
 
     try:
-        # Run the async function in a new event loop
-        return asyncio.run(search_tweets_async(username, password, keyword, total_limit))
+        return asyncio.run(search_tweets_async(username, password, keyword, limit, after))
     except Exception as e:
         logging.error(f"Failed to run the async X fetcher: {e}")
-        return []
+        return [], None

@@ -18,13 +18,13 @@ SUBREDDITS_TO_SEARCH = [
 # Supported image formats
 IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png']
 
-def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyword: str, total_limit: int = 25, search_limit_per_subreddit: int = 50, upvote_threshold: int = 500):
+def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyword: str, limit: int = 25, after: str | None = None):
     """
-    Fetches image-based memes from Reddit based on a keyword and specific criteria.
+    Fetches a paginated list of image-based memes from Reddit, sorted by new.
     """
     if not all([client_id, client_secret, user_agent]):
         logging.error("Reddit API credentials are missing.")
-        return []
+        return [], None
 
     try:
         reddit = praw.Reddit(
@@ -34,45 +34,51 @@ def fetch_reddit_memes(client_id: str, client_secret: str, user_agent: str, keyw
         )
     except Exception as e:
         logging.error(f"Failed to initialize PRAW Reddit instance: {e}")
-        return []
+        return [], None
 
     found_memes = []
     processed_post_ids = set()
     used_ids = get_used_meme_ids()
     logging.info(f"Excluding {len(used_ids)} already used memes.")
 
-    logging.info(f"Searching for up to {total_limit} memes with keyword '{keyword}' sorted by 'new'...")
-    for subreddit_name in SUBREDDITS_TO_SEARCH:
-        if len(found_memes) >= total_limit:
-            break
-        try:
-            subreddit = reddit.subreddit(subreddit_name)
-            # Sort by "new" to get fresh content on each search, making it act like a refresh.
-            for post in subreddit.search(keyword, sort="new", limit=search_limit_per_subreddit):
-                if post.id in processed_post_ids or post.id in used_ids:
-                    continue
-                processed_post_ids.add(post.id)
+    # PRAW's search uses 'after' for pagination, which is a post's fullname.
+    search_params = {}
+    if after:
+        search_params['after'] = after
 
-                if len(found_memes) >= total_limit:
-                    break
+    logging.info(f"Searching Reddit for '{keyword}', sorted by 'new', after post: {after}")
 
-                if post.score < upvote_threshold:
-                    continue
+    # Join subreddits for a single, more efficient search query
+    subreddit_string = "+".join(SUBREDDITS_TO_SEARCH)
+    last_post_fullname = None
 
-                is_image = any(post.url.lower().endswith(ext) for ext in IMAGE_EXTENSIONS)
-                if not is_image:
-                    continue
+    try:
+        subreddit = reddit.subreddit(subreddit_string)
+        # Fetch more than the limit to account for filtering
+        for post in subreddit.search(keyword, sort="new", limit=limit * 2, params=search_params):
+            if len(found_memes) >= limit:
+                break # Stop once we have enough valid memes for this page.
 
-                found_memes.append({
-                    'id': post.id,
-                    'title': post.title,
-                    'url': post.url,
-                    'score': post.score,
-                    'thumbnail_url': post.thumbnail
-                })
-        except Exception as e:
-            logging.error(f"Could not search subreddit r/{subreddit_name}: {e}")
-            continue
+            if post.id in processed_post_ids or post.id in used_ids:
+                continue
+            processed_post_ids.add(post.id)
 
-    random.shuffle(found_memes)
-    return found_memes[:total_limit]
+            is_image = any(post.url.lower().endswith(ext) for ext in IMAGE_EXTENSIONS)
+            if not is_image:
+                continue
+
+            found_memes.append({
+                'id': post.id,
+                'title': post.title,
+                'url': post.url,
+                'score': post.score,
+                'thumbnail_url': post.thumbnail,
+                'source': 'reddit'
+            })
+            last_post_fullname = post.fullname # Continually update to get the last valid post
+
+    except Exception as e:
+        logging.error(f"Could not search subreddits: {e}")
+
+    # No longer shuffling, as chronological order is desired for pagination
+    return found_memes, last_post_fullname

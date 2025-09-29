@@ -132,41 +132,44 @@ class PreprocessingWorker(QThread):
 
 # --- Worker Threads ---
 class SearchWorker(QThread):
-    finished = pyqtSignal(list)
+    finished = pyqtSignal(list, str, str) # memes, reddit_after, x_after
     error = pyqtSignal(str)
 
-    def __init__(self, settings, keyword, source):
+    def __init__(self, settings, keyword, source, reddit_after=None, x_after=None):
         super().__init__()
         self.settings = settings
         self.keyword = keyword
         self.source = source
+        self.reddit_after = reddit_after
+        self.x_after = x_after
 
     def run(self):
         try:
             all_memes = []
+            new_reddit_after, new_x_after = self.reddit_after, self.x_after
+
             if self.source in ["reddit", "both"]:
-                logging.info("Fetching memes from Reddit...")
-                reddit_memes = fetch_reddit_memes(
+                logging.info(f"Fetching memes from Reddit after: {self.reddit_after}")
+                reddit_memes, new_reddit_after = fetch_reddit_memes(
                     client_id=self.settings["reddit_client_id"],
                     client_secret=self.settings["reddit_client_secret"],
                     user_agent=self.settings["reddit_user_agent"],
-                    keyword=self.keyword
+                    keyword=self.keyword,
+                    after=self.reddit_after
                 )
                 all_memes.extend(reddit_memes)
 
             if self.source in ["x", "both"]:
-                logging.info("Fetching memes from X/Twitter...")
-                x_memes = fetch_x_memes(
+                logging.info(f"Fetching memes from X after: {self.x_after}")
+                x_memes, new_x_after = fetch_x_memes(
                     username=self.settings["x_username"],
                     password=self.settings["x_password"],
-                    keyword=self.keyword
+                    keyword=self.keyword,
+                    after=self.x_after
                 )
                 all_memes.extend(x_memes)
 
-            # Shuffle the combined list to mix sources
-            random.shuffle(all_memes)
-
-            self.finished.emit(all_memes)
+            self.finished.emit(all_memes, new_reddit_after, new_x_after)
         except Exception as e:
             logging.error(f"Error in SearchWorker: {e}", exc_info=True)
             self.error.emit(f"Failed to fetch memes: {e}")
@@ -330,7 +333,13 @@ class CreatorTab(QWidget):
         super().__init__()
         self.image_downloaders = []
         self.last_compilation_data = []
-        self.current_source = "reddit" # Default source
+        self.current_source = "reddit"
+
+        # --- State for Infinite Scroll ---
+        self.last_keyword_searched = ""
+        self.reddit_after = None
+        self.x_after = None
+        self.is_loading_more = False
 
         main_layout = QVBoxLayout(self)
 
@@ -339,8 +348,10 @@ class CreatorTab(QWidget):
         self.keyword_input = QLineEdit()
         self.keyword_input.setPlaceholderText("Enter meme keyword...")
         self.search_button = QPushButton("Search")
+        self.refresh_button = QPushButton("Refresh")
         search_layout.addWidget(self.keyword_input)
         search_layout.addWidget(self.search_button)
+        search_layout.addWidget(self.refresh_button)
 
         # --- Source Selection ---
         source_group_box = QGroupBox("Meme Source")
@@ -380,6 +391,10 @@ class CreatorTab(QWidget):
         self.meme_grid_layout = QGridLayout(self.meme_container)
         self.meme_grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll_area.setWidget(self.meme_container)
+
+        # Connect scrollbar signal for infinite scroll
+        scroll_area.verticalScrollBar().valueChanged.connect(self._check_scroll)
+
         main_layout.addWidget(scroll_area)
         self._show_placeholder_message("Enter a keyword to find memes.")
 
@@ -391,7 +406,8 @@ class CreatorTab(QWidget):
         bottom_layout.addWidget(self.compile_button)
         main_layout.addLayout(bottom_layout)
 
-        self.search_button.clicked.connect(self._start_search)
+        self.search_button.clicked.connect(self._start_new_search)
+        self.refresh_button.clicked.connect(self._refresh_search)
         self.compile_button.clicked.connect(self._start_compilation)
         self.refresh_quota_button.clicked.connect(self._update_character_count)
 
@@ -429,65 +445,95 @@ class CreatorTab(QWidget):
             self._clear_grid()
             self._show_placeholder_message(f"Source set to {source.capitalize()}. Enter a keyword to search.")
 
-    def _start_search(self):
-        settings = self._load_settings()
-        if not settings:
-            QMessageBox.warning(self, "Settings Missing", "Please configure your settings first.")
-            return
-
-        # Validate credentials based on selected source
-        if self.current_source in ["reddit", "both"]:
-            if not all(settings.get(k) for k in ["reddit_client_id", "reddit_client_secret", "reddit_user_agent"]):
-                QMessageBox.warning(self, "Reddit Settings Missing", "Please configure Reddit API credentials in Settings to use this source.")
-                return
-        if self.current_source in ["x", "both"]:
-            if not all(settings.get(k) for k in ["x_username", "x_password"]):
-                QMessageBox.warning(self, "X/Twitter Settings Missing", "Please configure your X/Twitter username and password in Settings to use this source.")
-                return
-
+    def _start_new_search(self):
         keyword = self.keyword_input.text().strip()
         if not keyword:
             QMessageBox.warning(self, "Keyword Missing", "Please enter a keyword.")
             return
 
-        self._set_ui_enabled(False)
-        self.status_label.setText(f"Status: Searching {self.current_source.capitalize()} for '{keyword}'...")
+        self.last_keyword_searched = keyword
+        self.reddit_after = None
+        self.x_after = None
         self._clear_grid()
-        self._show_placeholder_message("Searching for new memes...")
+        self._show_placeholder_message(f"Searching for '{keyword}'...")
+        self._execute_search()
 
-        self.search_worker = SearchWorker(settings, keyword, self.current_source)
-        self.search_worker.finished.connect(self._display_memes)
+    def _refresh_search(self):
+        if not self.last_keyword_searched:
+            QMessageBox.warning(self, "No Search History", "Please perform a search first before refreshing.")
+            return
+
+        self.reddit_after = None
+        self.x_after = None
+        self._clear_grid()
+        self._show_placeholder_message(f"Refreshing results for '{self.last_keyword_searched}'...")
+        self._execute_search()
+
+    def _load_more_memes(self):
+        if not self.is_loading_more:
+            self.status_label.setText("Status: Loading more memes...")
+            self._execute_search()
+
+    def _execute_search(self):
+        settings = self._load_settings()
+        if not settings:
+            return self._handle_error("Settings not found. Please configure your settings first.")
+
+        # Validate credentials based on selected source
+        if self.current_source in ["reddit", "both"] and not all(settings.get(k) for k in ["reddit_client_id", "reddit_client_secret", "reddit_user_agent"]):
+            return self._handle_error("Reddit API credentials are not configured in Settings.")
+        if self.current_source in ["x", "both"] and not all(settings.get(k) for k in ["x_username", "x_password"]):
+            return self._handle_error("X/Twitter credentials are not configured in Settings.")
+
+        self.is_loading_more = True
+        self._set_ui_enabled(False)
+
+        self.search_worker = SearchWorker(settings, self.last_keyword_searched, self.current_source, self.reddit_after, self.x_after)
+        self.search_worker.finished.connect(self._on_search_finished)
         self.search_worker.error.connect(self._handle_error)
         self.search_worker.start()
 
-    def _display_memes(self, memes):
+    def _on_search_finished(self, memes, reddit_after, x_after):
+        # Update pagination cursors
+        self.reddit_after = reddit_after
+        self.x_after = x_after
+
+        # If it was the first search and no memes were found.
+        if self.meme_grid_layout.count() == 1 and not memes:
+             self._show_placeholder_message("No memes found matching your criteria. Try another keyword.")
+             self.status_label.setText("Status: No memes found.")
+        elif not memes:
+            self.status_label.setText("Status: No more memes found.")
+        else:
+            self._display_memes(memes)
+
+        self.is_loading_more = False
         self._set_ui_enabled(True)
-        self._clear_grid()
 
-        if not memes:
-            self._show_placeholder_message("No memes found matching your criteria. Try another keyword.")
-            self.status_label.setText("Status: No memes found.")
-            return
+    def _display_memes(self, memes):
+        # If a placeholder message is present, clear it before adding new memes.
+        if self.meme_grid_layout.count() == 1:
+            placeholder = self.meme_grid_layout.itemAt(0).widget()
+            if isinstance(placeholder, QLabel):
+                self._clear_grid()
 
-        self.status_label.setText(f"Status: Displaying {len(memes)} memes. Downloading thumbnails...")
-        self.image_downloaders.clear()
+        self.status_label.setText(f"Status: Displaying {len(memes)} new memes...")
 
+        num_existing_items = self.meme_grid_layout.count()
         num_cols = 4
-        for i, meme_data in enumerate(memes):
+        row = num_existing_items // num_cols
+        col = num_existing_items % num_cols
+
+        for meme_data in memes:
             widget = MemeWidget(meme_data)
-            row = i // num_cols
-            col = i % num_cols
             self.meme_grid_layout.addWidget(widget, row, col)
 
-            # Prioritize thumbnail_url, but fall back to the main image url if it's invalid or missing.
-            # This makes the UI more robust for different data sources (Reddit vs. X).
             thumbnail_url_to_use = meme_data.get('thumbnail_url')
             if not thumbnail_url_to_use or thumbnail_url_to_use in ['self', 'default', 'nsfw', 'image']:
-                thumbnail_url_to_use = meme_data.get('url') # Fallback to the main image URL
+                thumbnail_url_to_use = meme_data.get('url')
 
-            # If both URLs are somehow invalid, use a generic placeholder.
             if not thumbnail_url_to_use:
-                thumbnail_url_to_use = "https://www.redditstatic.com/icon.png" # Generic placeholder
+                thumbnail_url_to_use = "https://www.redditstatic.com/icon.png"
 
             downloader = ImageDownloader(thumbnail_url_to_use)
             downloader.finished.connect(widget.set_image)
@@ -495,8 +541,27 @@ class CreatorTab(QWidget):
             self.image_downloaders.append(downloader)
             downloader.start()
 
+            col += 1
+            if col >= num_cols:
+                col = 0
+                row += 1
+
         self.compile_button.setEnabled(True)
         self.status_label.setText("Status: Ready")
+
+    def _check_scroll(self, value):
+        if self.is_loading_more:
+            return
+
+        scroll_bar = self.sender()
+        if scroll_bar.maximum() - value < 100: # Check if near the bottom
+            # Check if there are more memes to load from any source
+            if self.current_source == "reddit" and self.reddit_after:
+                self._load_more_memes()
+            elif self.current_source == "x" and self.x_after:
+                self._load_more_memes()
+            elif self.current_source == "both" and (self.reddit_after or self.x_after):
+                self._load_more_memes()
 
     def _start_compilation(self):
         settings = self._load_settings()
