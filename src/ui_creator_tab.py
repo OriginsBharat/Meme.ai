@@ -554,13 +554,18 @@ class CreatorTab(QWidget):
             return
 
         scroll_bar = self.sender()
-        if scroll_bar.maximum() - value < 100: # Check if near the bottom
-            # Check if there are more memes to load from any source
+        # Load more when the user is within 100 pixels of the bottom
+        if scroll_bar.maximum() - value < 100:
+            can_load_more = False
+            # Check if there are more memes to load based on the current source
             if self.current_source == "reddit" and self.reddit_after:
-                self._load_more_memes()
+                can_load_more = True
             elif self.current_source == "x" and self.x_after:
-                self._load_more_memes()
+                can_load_more = True
             elif self.current_source == "both" and (self.reddit_after or self.x_after):
+                can_load_more = True
+
+            if can_load_more:
                 self._load_more_memes()
 
     def _start_compilation(self):

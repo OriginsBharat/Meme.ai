@@ -4,8 +4,8 @@ This is a desktop application designed to automatically fetch memes from Reddit,
 
 ## Features
 
-- **Keyword-based Meme Fetching:** Searches Reddit for image-based memes based on your keywords.
-- **Smart Filtering:** Filters memes by a minimum upvote count (500+) and excludes memes that have already been used in a previous compilation.
+- **Multi-Platform Meme Fetching:** Searches Reddit and X (formerly Twitter) for image-based memes based on your keywords.
+- **Smart Filtering:** Excludes memes that have already been used in a previous compilation.
 - **OCR and TTS:** Automatically extracts text from image memes using Tesseract OCR and generates voiceovers using the ElevenLabs API.
 - **Automated Video Compilation:** Combines an intro, the selected memes, a background video, background music, and an outro into a single video file.
 - **YouTube Integration:** Option to upload the final video directly to your YouTube channel.
@@ -39,20 +39,23 @@ Before you can use the app, you must configure your API keys and file paths in t
     -   Create a new "script" app.
     -   Enter the `client ID` and `client secret` into the settings.
     -   For `User Agent`, you can enter something descriptive, like `MemeCompilerApp/1.0 by YourUsername`.
-2.  **ElevenLabs API Key:**
+2.  **X/Twitter Credentials:**
+    -   Enter your X/Twitter (username) and (password) in the corresponding fields.
+    -   *Note: It is recommended to use an account that you don't mind being used for automation. The application will save a session cookie to avoid logging in every time.*
+3.  **ElevenLabs API Key:**
     -   Sign up at [ElevenLabs](https://elevenlabs.io/).
     -   Find your API key in your profile settings and enter it.
-3.  **Google Client Secrets File (for YouTube Upload):**
+4.  **Google Client Secrets File (for YouTube Upload):**
     -   Go to the [Google Cloud Console](https://console.cloud.google.com/).
     -   Create a new project.
     -   Enable the "YouTube Data API v3".
     -   Create credentials for an "OAuth 2.0 Client ID" of type "Desktop application".
     -   Download the `client_secrets.json` file.
     -   In the app's settings, browse to and select this downloaded JSON file.
-4.  **Tesseract Configuration:**
+5.  **Tesseract Configuration:**
     -   **Tesseract Executable:** Enter the full path to `tesseract.exe` that you noted during installation.
     -   **Tessdata Directory:** You must also provide the path to the `tessdata` directory. This folder is located in your Tesseract installation directory (e.g., `C:\Program Files\Tesseract-OCR\tessdata`). Both paths are required for OCR to function correctly.
-5.  **Media Files:**
+6.  **Media Files:**
     -   Use the "Browse..." buttons to select your default intro, outro, background video, and background music files.
 
 **Click "Save Settings" after entering all your information.**

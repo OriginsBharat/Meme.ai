@@ -10,33 +10,36 @@ COOKIE_FILE_PATH = 'x_cookies.json'
 
 async def search_tweets_async(username, password, keyword, limit, after=None):
     """
-    Asynchronous function to perform the tweet search.
-    'after' is included for signature consistency but is not used by twikit's search.
+    Asynchronous function to perform the tweet search, with pagination.
     """
     client = Client(language='en-US')
 
     try:
         logging.info("Attempting to log in to X/Twitter...")
-        await client.login(
-            auth_info_1=username,
-            password=password,
-            cookies_file=COOKIE_FILE_PATH
-        )
-        logging.info("X/Twitter login successful.")
+        # Try to load cookies to avoid repeated logins
+        try:
+            await client.load_cookies(COOKIE_FILE_PATH)
+            logging.info("X/Twitter session loaded from cookies.")
+        except FileNotFoundError:
+            logging.info("Cookie file not found, proceeding with login.")
+            await client.login(
+                auth_info_1=username,
+                password=password
+            )
+            await client.save_cookies(COOKIE_FILE_PATH)
+            logging.info("X/Twitter login successful and cookies saved.")
     except Exception as e:
         logging.error(f"Failed to log in to X/Twitter: {e}", exc_info=True)
         return [], None
 
     found_memes = []
-    # Note: twikit search doesn't have a native 'after' cursor.
-    # It fetches a batch. Infinite scroll for X will be more like a "load more" button
-    # that re-runs the search, relying on 'newest' sort order to get different results.
-    # For now, we fetch one batch and return None for the cursor.
+    next_cursor = None
 
     try:
-        logging.info(f"Searching X/Twitter for '{keyword}', sorted by 'Latest'")
+        logging.info(f"Searching X/Twitter for '{keyword}', sorted by 'Latest', with cursor: {after}")
         # Search by 'Latest' to get the most recent tweets first.
-        search_results = await client.search_tweet(keyword, 'Latest')
+        # The 'after' parameter from our function is used as the 'cursor' for twikit.
+        search_results = await client.search_tweet(keyword, 'Latest', cursor=after)
 
         for tweet in search_results:
             if len(found_memes) >= limit:
@@ -54,11 +57,15 @@ async def search_tweets_async(username, password, keyword, limit, after=None):
                             'source': 'x'
                         })
                         break # Use the first photo found in the tweet
+
+        # After the loop, get the cursor for the next page of results.
+        next_cursor = search_results.cursor
+        logging.info(f"Next X/Twitter cursor: {next_cursor}")
+
     except Exception as e:
         logging.error(f"An error occurred during tweet search: {e}", exc_info=True)
 
-    # Return None for the cursor, as twikit does not support it for search.
-    return found_memes, None
+    return found_memes, next_cursor
 
 def fetch_x_memes(username: str, password: str, keyword: str, limit: int = 25, after: str | None = None):
     """
